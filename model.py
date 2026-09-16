@@ -43,4 +43,6 @@ class FeedForward(nn.Module):
 
     def forward(self, x: Tensor):
         up = self.up_proj(x)
-        gate = self.gate_proj(x)
+        gate = F.silu(self.gate_proj(x))
+        x = up * gate
+        return self.down_proj(x)
