@@ -33,13 +33,15 @@ def rope_freqs_cis(dim: int, seq_len: int, base: float) -> Tensor:
     return torch.polar(torch.ones_like(angles), angles)  # [T, Dr/2] complex
 
 
-def apply_rope(x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dr] or [B, T, Dr]
+def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [B, T, H, Dr]
     """Rotate each adjacent pair of features by its position-dependent angle.
 
-    ``freqs_cis`` holds one row per position of ``x``, so the caller slices it to the positions
-    ``x`` covers.
+    ``x`` is [B, T, H, Dr] or [B, T, Dr]. ``freqs_cis`` holds one row per position of ``x``, so
+    the caller slices it to the positions ``x`` covers. ``inverse`` turns the other way.
     """
     pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, T, H, Dr/2]
+    if inverse:
+        freqs_cis = freqs_cis.conj()  # the conjugate rotates by minus the angle
     if x.ndim == 3:
         freqs_cis = freqs_cis.view(1, x.size(1), -1)  # [1, T, Dr/2]
     else:
