@@ -33,7 +33,7 @@ class RMSNorm(nn.Module):
         return normed.to(x.dtype) * self.weight  # [..., dim]
 
 
-class SwiGLU(nn.Module):
+class FeedForward(nn.Module):
     def __init__(self):
         super().__init__()
 
