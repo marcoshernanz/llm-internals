@@ -1,3 +1,4 @@
+from xml.dom.xmlbuilder import DOMEntityResolver
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -34,11 +35,11 @@ class RMSNorm(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self):
+    def __init__(self, d_hidden: int):
         super().__init__()
-        self.up_proj = Linear()
-        self.gate_proj = Linear()
-        self.down_proj = Linear()
+        self.up_proj = Linear(D_MODEL, d_hidden)
+        self.gate_proj = Linear(D_MODEL, d_hidden)
+        self.down_proj = Linear(d_hidden, D_MODEL)
 
     def forward(self, x: Tensor):
         pass
