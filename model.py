@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 
-
 D_MODEL = 64
 
 
