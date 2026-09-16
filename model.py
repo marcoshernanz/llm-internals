@@ -8,7 +8,7 @@ class RMSNorm(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = 1e-5
+        self.eps = 1e-20
 
     def forward(self, x: torch.Tensor):  # [..., dim]
         mean_square = x.pow(2).mean(dim=-1, keepdim=True)  # [..., 1]
