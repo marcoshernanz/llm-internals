@@ -33,12 +33,19 @@ def rope_freqs_cis(dim: int, seq_len: int, base: float) -> Tensor:
     return torch.polar(torch.ones_like(angles), angles)  # [T, Dr/2] complex
 
 
-def apply_rope(x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, H, T, Dr]
-    """Rotate each adjacent pair of features by its position-dependent angle."""
-    seq_len = x.size(2)
-    pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, H, T, Dr/2]
-    rotated = pairs * freqs_cis[:seq_len]  # [B, H, T, Dr/2]
-    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, H, T, Dr]
+def apply_rope(x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dr] or [B, T, Dr]
+    """Rotate each adjacent pair of features by its position-dependent angle.
+
+    ``freqs_cis`` holds one row per position of ``x``, so the caller slices it to the positions
+    ``x`` covers.
+    """
+    pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, T, H, Dr/2]
+    if x.ndim == 3:
+        freqs_cis = freqs_cis.view(1, x.size(1), -1)  # [1, T, Dr/2]
+    else:
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, -1)  # [1, T, 1, Dr/2]
+    rotated = pairs * freqs_cis  # [B, T, H, Dr/2]
+    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, T, H, Dr]
 
 
 class Linear(nn.Module):
