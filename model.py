@@ -5,8 +5,8 @@ D_MODEL = 64
 
 
 class Linear(nn.Module):
-    def __init__(self):
-        pass
+    def __init__(self, in_features: int, out_features: int):
+        self.weight = nn.Parameter(torch.randn([in_features, out_features]))
 
     def forward(self, x: Tensor):
         pass
