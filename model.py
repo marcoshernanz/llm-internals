@@ -1,16 +1,16 @@
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 D_MODEL = 64
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, eps: float = 1e-20) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = 1e-20
+        self.eps = eps
 
-    def forward(self, x: torch.Tensor):  # [..., dim]
-        mean_square = x.pow(2).mean(dim=-1, keepdim=True)  # [..., 1]
-        normalized = x * torch.rsqrt(mean_square + self.eps)  # [..., dim]
-        return normalized * self.weight  # [..., dim]
+    def forward(self, x: Tensor) -> Tensor:  # [..., dim]
+        x32 = x.float()  # [..., dim]
+        normed = x32 * torch.rsqrt(x32.square().mean(dim=-1, keepdim=True) + self.eps)  # [..., dim]
+        return normed.to(x.dtype) * self.weight  # [..., dim]
