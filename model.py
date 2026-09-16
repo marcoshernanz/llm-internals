@@ -42,4 +42,5 @@ class FeedForward(nn.Module):
         self.down_proj = Linear(d_hidden, D_MODEL)
 
     def forward(self, x: Tensor):
-        pass
+        up = self.up_proj(x)
+        gate = self.gate_proj(x)
