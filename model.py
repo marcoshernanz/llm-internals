@@ -9,6 +9,8 @@ Shape letters used in the comments:
     Dr  rotary dims per head (qk_rope_head_dim), the last Dr of the Dh
 """
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -18,6 +20,8 @@ INIT_STD = 0.006
 SWIGLU_LIMIT = 10.0
 ROPE_THETA = 10000.0
 COMPRESS_ROPE_THETA = 160000.0
+ROPE_BETA_FAST = 32
+ROPE_BETA_SLOW = 1
 
 
 def init_weights(module: nn.Module) -> None:
@@ -25,9 +29,37 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, std=INIT_STD)
 
 
-def rope_freqs_cis(dim: int, seq_len: int, base: float) -> Tensor:
-    """One unit complex number per position and pair: cos(angle) + i sin(angle)."""
+def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: float) -> Tensor:
+    """Slow down the pairs that turn too little over the training context to be used beyond it.
+
+    A pair that completes at least ROPE_BETA_FAST turns over ``original_seq_len`` has shown the
+    model every angle and keeps its frequency. A pair that completes at most ROPE_BETA_SLOW turns
+    would reach unseen angles, so its frequency is divided by ``factor``. Pairs in between blend.
+    """
+    dim = 2 * freqs.numel()
+
+    def pair_completing(turns: float) -> float:
+        """Index of the pair that completes ``turns`` rotations over the training context."""
+        return dim * math.log(original_seq_len / (turns * 2 * math.pi)) / (2 * math.log(base))
+
+    low = max(math.floor(pair_completing(ROPE_BETA_FAST)), 0)
+    high = min(math.ceil(pair_completing(ROPE_BETA_SLOW)), dim - 1)
+    pair_index = torch.arange(dim // 2)  # [Dr/2]
+    ramp = ((pair_index - low) / max(high - low, 1e-3)).clamp(0, 1)  # [Dr/2], 0 keeps, 1 slows
+    return freqs * (1 - ramp) + (freqs / factor) * ramp  # [Dr/2]
+
+
+def rope_freqs_cis(
+    dim: int, seq_len: int, base: float, original_seq_len: int = 0, factor: float = 1.0
+) -> Tensor:
+    """One unit complex number per position and pair: cos(angle) + i sin(angle).
+
+    With ``original_seq_len > 0`` the frequencies are YaRN-rescaled for running ``factor`` times
+    beyond the training context.
+    """
     freqs = 1.0 / (base ** (torch.arange(0, dim, 2) / dim))  # [Dr/2]
+    if original_seq_len > 0:
+        freqs = yarn_rescale(freqs, base, original_seq_len, factor)  # [Dr/2]
     positions = torch.arange(seq_len)  # [T]
     angles = torch.outer(positions, freqs)  # [T, Dr/2]
     return torch.polar(torch.ones_like(angles), angles)  # [T, Dr/2] complex
