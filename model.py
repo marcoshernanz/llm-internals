@@ -4,6 +4,8 @@ Shape letters used in the comments:
     T   sequence length (time)
     D   model width (hidden_size)
     F   hidden width of a feed-forward network (intermediate size)
+    H   attention heads
+    Dh  width of one head
 """
 
 import torch
@@ -13,11 +15,28 @@ from torch import Tensor, nn
 NORM_EPS = 1e-20
 INIT_STD = 0.006
 SWIGLU_LIMIT = 10.0
+ROPE_THETA = 10000.0
 
 
 def init_weights(module: nn.Module) -> None:
     if isinstance(module, Linear):
         nn.init.normal_(module.weight, std=INIT_STD)
+
+
+def rope_table(context_len: int, d_head: int) -> Tensor:
+    """One unit complex number per position and pair: cos(angle) + i sin(angle)."""
+    inv_freq = 1.0 / (ROPE_THETA ** (torch.arange(0, d_head, 2) / d_head))  # [Dh/2]
+    positions = torch.arange(context_len)  # [T]
+    angles = positions[:, None] * inv_freq[None, :]  # [T, Dh/2]
+    return torch.polar(torch.ones_like(angles), angles)  # [T, Dh/2] complex
+
+
+def apply_rope(x: Tensor, table: Tensor) -> Tensor:  # [B, H, T, Dh]
+    """Rotate each adjacent pair of features by its position-dependent angle."""
+    seq_len = x.size(2)
+    pairs = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))  # [B, H, T, Dh/2]
+    rotated = pairs * table[:seq_len]  # [B, H, T, Dh/2]
+    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, H, T, Dh]
 
 
 class Linear(nn.Module):
