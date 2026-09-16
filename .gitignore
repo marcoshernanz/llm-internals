@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.ruff_cache/
+.pyright/
+.pytest_cache/
+.kaggle/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.cache/
