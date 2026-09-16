@@ -1,9 +1,18 @@
+"""
+Shape letters used in the comments:
+    B   batch size
+    T   sequence length (time)
+    D   model width (hidden_size)
+    F   hidden width of a feed-forward network (intermediate size)
+"""
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-D_MODEL = 64
-INIT_STD = 0.006  # DeepSeek-V3 4.3: every learnable parameter starts from N(0, 0.006)
+NORM_EPS = 1e-20
+INIT_STD = 0.006
+SWIGLU_LIMIT = 10.0
 
 
 def init_weights(module: nn.Module) -> None:
@@ -21,9 +30,9 @@ class Linear(nn.Module):
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-20) -> None:
+    def __init__(self, dim: int, eps: float = NORM_EPS) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
+        self.weight = nn.Parameter(torch.ones(dim))  # [dim]
         self.eps = eps
 
     def forward(self, x: Tensor) -> Tensor:  # [..., dim]
@@ -33,18 +42,18 @@ class RMSNorm(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim: int, inter_dim: int, swiglu_limit: float = 10.0) -> None:
+    def __init__(self, dim: int, inter_dim: int, swiglu_limit: float = SWIGLU_LIMIT) -> None:
         super().__init__()
         self.gate_proj = Linear(dim, inter_dim)
         self.up_proj = Linear(dim, inter_dim)
         self.down_proj = Linear(inter_dim, dim)
         self.swiglu_limit = swiglu_limit
 
-    def forward(self, x: Tensor) -> Tensor:  # [..., dim]
-        gate = self.gate_proj(x).float()  # [..., inter_dim]
-        up = self.up_proj(x).float()  # [..., inter_dim]
+    def forward(self, x: Tensor) -> Tensor:  # [..., D]
+        gate = self.gate_proj(x).float()  # [..., F]
+        up = self.up_proj(x).float()  # [..., F]
         if self.swiglu_limit > 0:
             gate = gate.clamp(max=self.swiglu_limit)
             up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
-        hidden = F.silu(gate) * up  # [..., inter_dim]
-        return self.down_proj(hidden.to(x.dtype))  # [..., dim]
+        hidden = F.silu(gate) * up  # [..., F]
+        return self.down_proj(hidden.to(x.dtype))  # [..., D]
