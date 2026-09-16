@@ -36,6 +36,9 @@ class RMSNorm(nn.Module):
 class FeedForward(nn.Module):
     def __init__(self):
         super().__init__()
+        self.up_proj = Linear()
+        self.gate_proj = Linear()
+        self.down_proj = Linear()
 
     def forward(self, x: Tensor):
         pass
