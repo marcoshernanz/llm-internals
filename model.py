@@ -14,3 +14,11 @@ class RMSNorm(nn.Module):
         x32 = x.float()  # [..., dim]
         normed = x32 * torch.rsqrt(x32.square().mean(dim=-1, keepdim=True) + self.eps)  # [..., dim]
         return normed.to(x.dtype) * self.weight  # [..., dim]
+
+
+class SwiGLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
