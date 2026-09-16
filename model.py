@@ -9,7 +9,7 @@ class Linear(nn.Module):
         self.weight = nn.Parameter(torch.randn([in_features, out_features]))
 
     def forward(self, x: Tensor):
-        pass
+        return x @ self.weight
 
 
 class RMSNorm(nn.Module):
