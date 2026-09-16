@@ -7,7 +7,6 @@ INIT_STD = 0.006  # DeepSeek-V3 4.3: every learnable parameter starts from N(0, 
 
 
 def init_weights(module: nn.Module) -> None:
-    """Draw every weight matrix from one narrow normal. Exceptions are added as they appear."""
     if isinstance(module, Linear):
         nn.init.normal_(module.weight, std=INIT_STD)
 
@@ -34,8 +33,6 @@ class RMSNorm(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """SwiGLU MLP with the V4 clamp. Every FFN in the model is one of these (an MoE expert)."""
-
     def __init__(self, dim: int, inter_dim: int, swiglu_limit: float = 10.0) -> None:
         super().__init__()
         self.gate_proj = Linear(dim, inter_dim)
