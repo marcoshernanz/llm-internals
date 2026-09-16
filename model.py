@@ -2,11 +2,14 @@ import torch
 from torch import nn
 
 
+D_MODEL = 64
+
+
 class RMSNorm(nn.Module):
     def __init__(self):
         super().__init__()
 
-        weight = nn.Parameter(D_MODEL)
+        weight = nn.Parameter(torch.ones(D_MODEL))
 
         self.eps = 1e-5
 
