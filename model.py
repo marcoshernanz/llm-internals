@@ -6,6 +6,7 @@ Shape letters used in the comments:
     F   hidden width of a feed-forward network (intermediate size)
     H   attention heads
     Dh  width of one head
+    Dr  rotary dims per head (qk_rope_head_dim), the last Dr of the Dh
 """
 
 import torch
@@ -16,6 +17,7 @@ NORM_EPS = 1e-20
 INIT_STD = 0.006
 SWIGLU_LIMIT = 10.0
 ROPE_THETA = 10000.0
+COMPRESS_ROPE_THETA = 160000.0
 
 
 def init_weights(module: nn.Module) -> None:
@@ -23,20 +25,20 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, std=INIT_STD)
 
 
-def rope_table(context_len: int, d_head: int) -> Tensor:
+def rope_freqs_cis(dim: int, seq_len: int, base: float) -> Tensor:
     """One unit complex number per position and pair: cos(angle) + i sin(angle)."""
-    inv_freq = 1.0 / (ROPE_THETA ** (torch.arange(0, d_head, 2) / d_head))  # [Dh/2]
-    positions = torch.arange(context_len)  # [T]
-    angles = positions[:, None] * inv_freq[None, :]  # [T, Dh/2]
-    return torch.polar(torch.ones_like(angles), angles)  # [T, Dh/2] complex
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2) / dim))  # [Dr/2]
+    positions = torch.arange(seq_len)  # [T]
+    angles = torch.outer(positions, freqs)  # [T, Dr/2]
+    return torch.polar(torch.ones_like(angles), angles)  # [T, Dr/2] complex
 
 
-def apply_rope(x: Tensor, table: Tensor) -> Tensor:  # [B, H, T, Dh]
+def apply_rope(x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, H, T, Dr]
     """Rotate each adjacent pair of features by its position-dependent angle."""
     seq_len = x.size(2)
-    pairs = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))  # [B, H, T, Dh/2]
-    rotated = pairs * table[:seq_len]  # [B, H, T, Dh/2]
-    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, H, T, Dh]
+    pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, H, T, Dr/2]
+    rotated = pairs * freqs_cis[:seq_len]  # [B, H, T, Dr/2]
+    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, H, T, Dr]
 
 
 class Linear(nn.Module):
