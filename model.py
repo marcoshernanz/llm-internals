@@ -6,9 +6,9 @@ D_MODEL = 64
 
 
 class RMSNorm(nn.Module):
-    def __init__(self):
+    def __init__(self, dim: int):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(D_MODEL))
+        self.weight = nn.Parameter(torch.ones(dim))
         self.eps = 1e-5
 
     def forward(self, x: torch.Tensor):
