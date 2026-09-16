@@ -34,14 +34,20 @@ class RMSNorm(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, d_hidden: int):
-        super().__init__()
-        self.up_proj = Linear(D_MODEL, d_hidden)
-        self.gate_proj = Linear(D_MODEL, d_hidden)
-        self.down_proj = Linear(d_hidden, D_MODEL)
+    """SwiGLU MLP with the V4 clamp. Every FFN in the model is one of these (an MoE expert)."""
 
-    def forward(self, x: Tensor):
-        up = self.up_proj(x)
-        gate = F.silu(self.gate_proj(x))
-        x = up * gate
-        return self.down_proj(x)
+    def __init__(self, dim: int, inter_dim: int, swiglu_limit: float = 10.0) -> None:
+        super().__init__()
+        self.gate_proj = Linear(dim, inter_dim)
+        self.up_proj = Linear(dim, inter_dim)
+        self.down_proj = Linear(inter_dim, dim)
+        self.swiglu_limit = swiglu_limit
+
+    def forward(self, x: Tensor) -> Tensor:  # [..., dim]
+        gate = self.gate_proj(x).float()  # [..., inter_dim]
+        up = self.up_proj(x).float()  # [..., inter_dim]
+        if self.swiglu_limit > 0:
+            gate = gate.clamp(max=self.swiglu_limit)
+            up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+        hidden = F.silu(gate) * up  # [..., inter_dim]
+        return self.down_proj(hidden.to(x.dtype))  # [..., dim]
