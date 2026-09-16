@@ -13,6 +13,7 @@
     "Muon",
     "Nesterov",
     "safetensors",
+    "silu",
     "Sinkhorn",
     "softmax",
     "softplus",
