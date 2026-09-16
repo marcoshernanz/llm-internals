@@ -30,12 +30,6 @@ def init_weights(module: nn.Module) -> None:
 
 
 def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: float) -> Tensor:
-    """Slow down the pairs that turn too little over the training context to be used beyond it.
-
-    A pair that completes at least ROPE_BETA_FAST turns over ``original_seq_len`` has shown the
-    model every angle and keeps its frequency. A pair that completes at most ROPE_BETA_SLOW turns
-    would reach unseen angles, so its frequency is divided by ``factor``. Pairs in between blend.
-    """
     dim = 2 * freqs.numel()
 
     def pair_completing(turns: float) -> float:
@@ -52,11 +46,6 @@ def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: floa
 def rope_freqs_cis(
     dim: int, seq_len: int, base: float, original_seq_len: int = 0, factor: float = 1.0
 ) -> Tensor:
-    """One unit complex number per position and pair: cos(angle) + i sin(angle).
-
-    With ``original_seq_len > 0`` the frequencies are YaRN-rescaled for running ``factor`` times
-    beyond the training context.
-    """
     freqs = 1.0 / (base ** (torch.arange(0, dim, 2) / dim))  # [Dr/2]
     if original_seq_len > 0:
         freqs = yarn_rescale(freqs, base, original_seq_len, factor)  # [Dr/2]
@@ -66,11 +55,6 @@ def rope_freqs_cis(
 
 
 def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [B, T, H, Dr]
-    """Rotate each adjacent pair of features by its position-dependent angle.
-
-    ``x`` is [B, T, H, Dr] or [B, T, Dr]. ``freqs_cis`` holds one row per position of ``x``, so
-    the caller slices it to the positions ``x`` covers. ``inverse`` turns the other way.
-    """
     pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, T, H, Dr/2]
     if inverse:
         freqs_cis = freqs_cis.conj()  # the conjugate rotates by minus the angle
