@@ -4,6 +4,14 @@ from torch import Tensor, nn
 D_MODEL = 64
 
 
+class Linear(nn.Module):
+    def __init__(self):
+        pass
+
+    def forward(self, x: Tensor):
+        pass
+
+
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-20) -> None:
         super().__init__()
