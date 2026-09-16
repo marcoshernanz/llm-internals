@@ -22,6 +22,7 @@ ROPE_THETA = 10000.0
 COMPRESS_ROPE_THETA = 160000.0
 ROPE_BETA_FAST = 32
 ROPE_BETA_SLOW = 1
+SLIDING_WINDOW = 128
 
 
 def init_weights(module: nn.Module) -> None:
