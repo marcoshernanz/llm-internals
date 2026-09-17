@@ -107,14 +107,14 @@ class FeedForward(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, dim: int, latent_dim: int, num_heads: int, head_dim: int):
+    def __init__(self, dim: int, q_lora_rank: int, num_heads: int, head_dim: int):
         super().__init__()
 
         self.num_heads = num_heads
 
-        self.q_down_proj = Linear(dim, latent_dim)
-        self.q_up_proj = Linear(latent_dim, num_heads * head_dim)
-        self.kv_down_proj = Linear(dim, latent_dim)
+        self.q_down_proj = Linear(dim, q_lora_rank)
+        self.q_up_proj = Linear(q_lora_rank, num_heads * head_dim)
+        self.kv_down_proj = Linear(dim, head_dim)
 
     def split_heads(self, x: Tensor, num_heads: int):
         batch_size, seq_len, dim = x.size()
