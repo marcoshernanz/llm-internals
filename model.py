@@ -7,6 +7,7 @@ Shape letters used in the comments:
     H   attention heads
     Dh  width of one head
     Dr  rotary dims per head (qk_rope_head_dim), the last Dr of the Dh
+    Dq  width of the query bottleneck (q_lora_rank)
 """
 
 import math
@@ -14,6 +15,8 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+
+from config import Config
 
 NORM_EPS = 1e-20
 INIT_STD = 0.006
@@ -67,6 +70,12 @@ def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  
     return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, T, H, Dr]
 
 
+def apply_partial_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [..., Dh]
+    rope_dim = 2 * freqs_cis.size(-1)  # Dr
+    content, rotary = x[..., :-rope_dim], x[..., -rope_dim:]  # [..., Dh-Dr], [..., Dr]
+    return torch.cat([content, apply_rope(rotary, freqs_cis, inverse)], dim=-1)  # [..., Dh]
+
+
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int) -> None:
         super().__init__()
@@ -107,26 +116,29 @@ class FeedForward(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, dim: int, q_lora_rank: int, num_heads: int, head_dim: int):
+    def __init__(self, config: Config) -> None:
         super().__init__()
+        self.num_heads = config.num_attention_heads
+        self.head_dim = config.head_dim
 
-        self.num_heads = num_heads
+        self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
+        self.q_norm = RMSNorm(config.q_lora_rank)
+        self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
+        self.kv_proj = Linear(config.hidden_size, self.head_dim)
+        self.kv_norm = RMSNorm(self.head_dim)
 
-        self.q_down_proj = Linear(dim, q_lora_rank)
-        self.q_up_proj = Linear(q_lora_rank, num_heads * head_dim)
-        self.kv_down_proj = Linear(dim, head_dim)
-        self.q_norm = RMSNorm(q_lora_rank)
-        self.kv_norm = RMSNorm(head_dim)
+        freqs_cis = rope_freqs_cis(
+            config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
+        )
+        self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
-        self.freqs_cis = rope_freqs_cis(dim, 1, 1)
+    def queries_and_kv(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
+        freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
 
-    def split_heads(self, x: Tensor, num_heads: int):
-        batch_size, seq_len, dim = x.size()
-        return x.view(batch_size, seq_len, num_heads, dim // num_heads)
+        q = self.q_norm(self.q_down_proj(x))  # [B, T, Dq]
+        q = self.q_up_proj(q).unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
+        q = apply_partial_rope(q, freqs_cis)  # [B, T, H, Dh]
 
-    def forward(self, x: Tensor):
-        q = self.q_up_proj(self.q_norm(self.q_down_proj(x)))
-        q = self.split_heads(q, self.num_heads)
-        apply_rope(q, self.freqs_cis)
-        c_kv = self.kv_norm(self.kv_down_proj(x))
-        apply_rope(c_kv, self.freqs_cis)
+        kv = self.kv_norm(self.kv_proj(x))  # [B, T, Dh]
+        kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
+        return q, kv
