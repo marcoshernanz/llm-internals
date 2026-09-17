@@ -104,3 +104,11 @@ class FeedForward(nn.Module):
             up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
         hidden = F.silu(gate) * up  # [..., F]
         return self.down_proj(hidden.to(x.dtype))  # [..., D]
+
+
+class Attention(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
