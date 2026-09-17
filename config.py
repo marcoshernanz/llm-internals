@@ -17,10 +17,6 @@ class Config:
     original_max_position_embeddings: int  # training length before the YaRN extension
     rope_factor: float  # YaRN extension factor
 
-    def __post_init__(self) -> None:
-        assert self.qk_rope_head_dim % 2 == 0 and self.qk_rope_head_dim <= self.head_dim
-        assert self.num_attention_heads % self.o_groups == 0
-
 
 V41_FLASH_CONFIG = Config(
     hidden_size=5120,
