@@ -124,4 +124,3 @@ class Attention(nn.Module):
         q = self.q_up_proj(self.q_down_proj(x))
         q = self.split_heads(q, self.num_heads)
         c_kv = self.kv_down_proj(x)
-        c_kv = self.split_heads(c_kv, self.num_heads)
