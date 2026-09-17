@@ -111,6 +111,7 @@ class Attention(nn.Module):
         super().__init__()
         self.q_down_proj = Linear(dim, latent_dim)
         self.q_up_proj = Linear(latent_dim, dim)
+        self.kv_down_proj = Linear(dim, latent_dim)
 
     def forward(self, x: Tensor):
         pass
