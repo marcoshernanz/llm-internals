@@ -123,6 +123,6 @@ class Attention(nn.Module):
         return x.view(batch_size, seq_len, num_heads, dim // num_heads)
 
     def forward(self, x: Tensor):
-        q = self.q_up_proj(self.q_down_proj(x))
+        q = self.q_up_proj(self.q_norm(self.q_down_proj(x)))
         q = self.split_heads(q, self.num_heads)
-        c_kv = self.kv_down_proj(x)
+        c_kv = self.kv_norm(self.kv_down_proj(x))
