@@ -107,8 +107,10 @@ class FeedForward(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self):
+    def __init__(self, dim: int, latent_dim: int):
         super().__init__()
+        self.q_down_proj = Linear(dim, latent_dim)
+        self.q_up_proj = Linear(latent_dim, dim)
 
     def forward(self, x: Tensor):
         pass
