@@ -127,4 +127,6 @@ class Attention(nn.Module):
     def forward(self, x: Tensor):
         q = self.q_up_proj(self.q_norm(self.q_down_proj(x)))
         q = self.split_heads(q, self.num_heads)
+        apply_rope(q, self.freqs_cis)
         c_kv = self.kv_norm(self.kv_down_proj(x))
+        apply_rope(c_kv, self.freqs_cis)
