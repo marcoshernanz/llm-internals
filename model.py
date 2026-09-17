@@ -115,6 +115,8 @@ class Attention(nn.Module):
         self.q_down_proj = Linear(dim, q_lora_rank)
         self.q_up_proj = Linear(q_lora_rank, num_heads * head_dim)
         self.kv_down_proj = Linear(dim, head_dim)
+        self.q_norm = RMSNorm(q_lora_rank)
+        self.kv_norm = RMSNorm(head_dim)
 
     def split_heads(self, x: Tensor, num_heads: int):
         batch_size, seq_len, dim = x.size()
