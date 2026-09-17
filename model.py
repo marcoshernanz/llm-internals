@@ -59,21 +59,29 @@ def rope_freqs_cis(
 
 
 def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [B, T, H, Dr]
-    pairs = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))  # [B, T, H, Dr/2]
+    pairs = x.float()  # [B, T, H, Dr]
+    pairs = pairs.unflatten(-1, (-1, 2))  # [B, T, H, Dr/2, 2]
+    pairs = torch.view_as_complex(pairs)  # [B, T, H, Dr/2] complex
+
     if inverse:
         freqs_cis = freqs_cis.conj()  # the conjugate rotates by minus the angle
     if x.ndim == 3:
         freqs_cis = freqs_cis.view(1, x.size(1), -1)  # [1, T, Dr/2]
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, -1)  # [1, T, 1, Dr/2]
-    rotated = pairs * freqs_cis  # [B, T, H, Dr/2]
-    return torch.view_as_real(rotated).flatten(-2).to(x.dtype)  # [B, T, H, Dr]
+
+    rotated = pairs * freqs_cis  # [B, T, H, Dr/2] complex
+    rotated = torch.view_as_real(rotated)  # [B, T, H, Dr/2, 2]
+    rotated = rotated.flatten(-2)  # [B, T, H, Dr]
+    return rotated.to(x.dtype)  # [B, T, H, Dr]
 
 
 def apply_partial_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [..., Dh]
     rope_dim = 2 * freqs_cis.size(-1)  # Dr
-    content, rotary = x[..., :-rope_dim], x[..., -rope_dim:]  # [..., Dh-Dr], [..., Dr]
-    return torch.cat([content, apply_rope(rotary, freqs_cis, inverse)], dim=-1)  # [..., Dh]
+    content = x[..., :-rope_dim]  # [..., Dh-Dr]
+    rotary = x[..., -rope_dim:]  # [..., Dr]
+    rotary = apply_rope(rotary, freqs_cis, inverse)  # [..., Dr]
+    return torch.cat([content, rotary], dim=-1)  # [..., Dh]
 
 
 class Linear(nn.Module):
@@ -93,8 +101,10 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:  # [..., dim]
         x32 = x.float()  # [..., dim]
-        normed = x32 * torch.rsqrt(x32.square().mean(dim=-1, keepdim=True) + self.eps)  # [..., dim]
-        return normed.to(x.dtype) * self.weight  # [..., dim]
+        mean_square = x32.square().mean(dim=-1, keepdim=True)  # [..., 1]
+        normed = x32 * torch.rsqrt(mean_square + self.eps)  # [..., dim]
+        normed = normed.to(x.dtype)  # [..., dim]
+        return normed * self.weight  # [..., dim]
 
 
 class FeedForward(nn.Module):
@@ -135,10 +145,13 @@ class Attention(nn.Module):
     def queries_and_kv(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
 
-        q = self.q_norm(self.q_down_proj(x))  # [B, T, Dq]
-        q = self.q_up_proj(q).unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
+        q = self.q_down_proj(x)  # [B, T, Dq]
+        q = self.q_norm(q)  # [B, T, Dq]
+        q = self.q_up_proj(q)  # [B, T, H*Dh]
+        q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
         q = apply_partial_rope(q, freqs_cis)  # [B, T, H, Dh]
 
-        kv = self.kv_norm(self.kv_proj(x))  # [B, T, Dh]
+        kv = self.kv_proj(x)  # [B, T, Dh]
+        kv = self.kv_norm(kv)  # [B, T, Dh]
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
         return q, kv
