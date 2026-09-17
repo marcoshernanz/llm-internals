@@ -118,6 +118,8 @@ class Attention(nn.Module):
         self.q_norm = RMSNorm(q_lora_rank)
         self.kv_norm = RMSNorm(head_dim)
 
+        self.freqs_cis = rope_freqs_cis(dim, 1, 1)
+
     def split_heads(self, x: Tensor, num_heads: int):
         batch_size, seq_len, dim = x.size()
         return x.view(batch_size, seq_len, num_heads, dim // num_heads)
