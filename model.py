@@ -8,6 +8,8 @@ Shape letters used in the comments:
     Dh  width of one head
     Dr  rotary dims per head (qk_rope_head_dim), the last Dr of the Dh
     Dq  width of the query bottleneck (q_lora_rank)
+    Do  width of the output bottleneck, one per group (o_lora_rank)
+    G   groups of heads in the output projection (o_groups)
 """
 
 import math
@@ -150,7 +152,6 @@ class Attention(nn.Module):
         self.kv_proj = Linear(config.hidden_size, self.head_dim)
         self.kv_norm = RMSNorm(self.head_dim)
         self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
-        self.out_proj = Linear(self.num_heads * self.head_dim, config.hidden_size)
         self.o_group_proj = Linear(
             self.num_heads * self.head_dim // self.o_groups, self.o_groups * self.o_lora_rank
         )
@@ -161,9 +162,7 @@ class Attention(nn.Module):
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
-    def queries_and_kv(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
-        freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
-
+    def queries_and_kv(self, x: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
         q = self.q_down_proj(x)  # [B, T, Dq]
         q = self.q_norm(q)  # [B, T, Dq]
         q = self.q_up_proj(q)  # [B, T, H*Dh]
@@ -190,16 +189,22 @@ class Attention(nn.Module):
         weights = weights.to(kv.dtype)  # [B, H, T, T]
         return torch.einsum("bhts,bsd->bthd", weights, kv)  # [B, T, H, Dh]
 
-    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
-        q, kv = self.queries_and_kv(x)  # [B, T, H, Dh], [B, T, Dh]
-        visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
-        attention = self.attend(q, kv, visible)  # [B, T, H, Dh]
-        o = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
-
+    def project_out(self, o: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dh]
+        o = apply_partial_rope(o, freqs_cis, inverse=True)  # [B, T, H, Dh]
         o = o.flatten(-2)  # [B, T, H*Dh]
         o = o.unflatten(-1, (self.o_groups, -1))  # [B, T, G, (H/G)*Dh]
-        w = self.o_group_proj.weight.view(self.o_groups, self.o_lora_rank, -1)  # [G, r, (H/G)*Dh]
-        o = torch.einsum("btgd,grd->btgr", o, w)  # [B, T, G, r]
 
-        o = o.flatten(-2)  # [B, T, G*r]
+        group_weight = self.o_group_proj.weight  # [G*Do, (H/G)*Dh]
+        group_weight = group_weight.view(self.o_groups, self.o_lora_rank, -1)  # [G, Do, (H/G)*Dh]
+        o = torch.einsum("btgd,grd->btgr", o, group_weight)  # [B, T, G, Do]
+
+        o = o.flatten(-2)  # [B, T, G*Do]
         return self.o_proj(o)  # [B, T, D]
+
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
+        visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
+
+        q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
+        o = self.attend(q, kv, visible)  # [B, T, H, Dh]
+        return self.project_out(o, freqs_cis)  # [B, T, D]
