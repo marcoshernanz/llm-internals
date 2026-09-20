@@ -236,7 +236,7 @@ class Gate(nn.Module):
         return weights, experts
 
 
-class MixtureOfExperts:
+class MixtureOfExperts(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.hidden_size = config.hidden_size
