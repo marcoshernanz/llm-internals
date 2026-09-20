@@ -144,7 +144,7 @@ class Gate(nn.Module):
         self.bias = nn.Buffer(torch.zeros(config.num_experts))
 
     def forward(self, x: Tensor):
-        pass
+        scores = self.weight(x)  # [..., E]
 
 
 class Attention(nn.Module):
