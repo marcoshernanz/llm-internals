@@ -191,3 +191,4 @@ class Attention(nn.Module):
         attention = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
         attention = attention.flatten(-2)
         attention = self.out_proj(attention)  # [B, T, D]
+        return attention
