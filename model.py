@@ -260,3 +260,4 @@ class MixtureOfExperts:
             out = expert(tokens)  # [X, D]
             w = weights[tokens, slot]  # [X]
             out *= w
+            output[rows] += out
