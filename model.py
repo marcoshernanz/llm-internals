@@ -186,4 +186,4 @@ class Attention(nn.Module):
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
         q, kv = self.queries_and_kv(x)  # [B, T, H, Dh], [B, T, Dh]
         visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
-        return self.attend(q, kv, visible)  # [B, T, H, Dh]
+        attention = self.attend(q, kv, visible)  # [B, T, H, Dh]
