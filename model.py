@@ -150,7 +150,7 @@ class Gate(nn.Module):
         scores = torch.sqrt(F.softplus(scores))
 
         biased_scores = scores + self.bias
-        torch.topk(biased_scores, self.num_active_experts)
+        selected = torch.topk(biased_scores, self.num_active_experts)
 
 
 class Attention(nn.Module):
