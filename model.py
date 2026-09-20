@@ -299,3 +299,4 @@ class Transformer(nn.Module):
 
         x = self.out_norm(x)
         x = self.out_proj(x)
+        return x
