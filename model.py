@@ -280,3 +280,11 @@ class Block(nn.Module):
         x = x + self.attention(self.attention_norm(x))
         x = x + self.ffn(self.ffn_norm(x))
         return x
+
+
+class Transformer(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
