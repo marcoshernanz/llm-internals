@@ -157,4 +157,4 @@ class Attention(nn.Module):
         return q, kv
 
     def forward(self, x: Tensor):
-        pass
+        q, kv = self.queries_and_kv(x)
