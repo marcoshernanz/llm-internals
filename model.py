@@ -268,8 +268,10 @@ class MixtureOfExperts(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
+
+        self.attention_norm = RMSNorm(config.hidden_size)
 
     def forward(self, x: Tensor):
         pass
