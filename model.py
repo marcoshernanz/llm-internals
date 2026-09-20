@@ -112,6 +112,14 @@ class Linear(nn.Module):
         return F.linear(x, self.weight)  # [..., out]
 
 
+class Embedding(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
+
+
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = NORM_EPS) -> None:
         super().__init__()
