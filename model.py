@@ -278,3 +278,5 @@ class Block(nn.Module):
 
     def forward(self, x: Tensor):
         x = x + self.attention(self.attention_norm(x))
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
