@@ -237,8 +237,9 @@ class Gate(nn.Module):
 
 
 class MixtureOfExperts:
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
+        self.gate = Gate(config)
 
     def forward(self, x: Tensor):
         pass
