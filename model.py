@@ -155,3 +155,6 @@ class Attention(nn.Module):
         kv = self.kv_norm(kv)  # [B, T, Dh]
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
         return q, kv
+
+    def forward(self, x: Tensor):
+        pass
