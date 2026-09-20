@@ -31,6 +31,8 @@ SLIDING_WINDOW = 128
 def init_weights(module: nn.Module) -> None:
     if isinstance(module, Linear):
         nn.init.normal_(module.weight, std=INIT_STD)
+    if isinstance(module, Attention):
+        nn.init.normal_(module.attn_sink, std=INIT_STD)
 
 
 def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: float) -> Tensor:
@@ -84,6 +86,14 @@ def apply_partial_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> T
     return torch.cat([content, rotary], dim=-1)  # [..., Dh]
 
 
+def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tensor:
+    positions = torch.arange(seq_len, device=device)  # [T]
+    distance = positions[:, None] - positions[None, :]  # [T, T]
+    causal = distance >= 0  # [T, T]
+    inside_window = distance < window  # [T, T]
+    return causal & inside_window  # [T, T]
+
+
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int) -> None:
         super().__init__()
@@ -130,24 +140,21 @@ class Attention(nn.Module):
         super().__init__()
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
+        self.softmax_scale = self.head_dim**-0.5
 
         self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
         self.q_norm = RMSNorm(config.q_lora_rank)
         self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
         self.kv_proj = Linear(config.hidden_size, self.head_dim)
         self.kv_norm = RMSNorm(self.head_dim)
-        self.sink = Linear(config.hidden_size, config.num_attention_heads)
+        self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
-        mask = torch.ones(config.max_position_embeddings, config.max_position_embeddings).tril()
-        mask = mask.masked_fill(mask, -torch.inf)
-        self.mask = nn.Buffer(mask)
-
-    def forward(self, x: Tensor):
+    def queries_and_kv(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
 
         q = self.q_down_proj(x)  # [B, T, Dq]
@@ -159,14 +166,24 @@ class Attention(nn.Module):
         kv = self.kv_proj(x)  # [B, T, Dh]
         kv = self.kv_norm(kv)  # [B, T, Dh]
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
+        return q, kv
 
-        q = q.transpose(1, 2)  # [B, H, T, Dh]
-        scores = q @ kv.mT  # [B, H, T, T]
-        scores /= 1 / math.sqrt(self.head_dim)
-        scores += self.mask
+    def attend(self, q: Tensor, kv: Tensor, visible: Tensor) -> Tensor:  # [B, T, H, Dh], [B, T, Dh]
+        scores = torch.einsum("bthd,bsd->bhts", q, kv)  # [B, H, T, T]
+        scores = scores * self.softmax_scale  # [B, H, T, T]
+        scores = scores.masked_fill(~visible, -torch.inf)  # [B, H, T, T]
+        scores = scores.float()
 
-        sink = self.sink(x)  # [B, T, H]
-        sink = sink.mT  # [B, H, T]
-        scores = scores.exp() / (sink + scores.exp().sum(dim=-1))  # [B, H, T, T]
-        kv = kv[:, None]
-        output = scores @ kv  # [B, H, T, Dh]
+        sink = self.attn_sink.view(1, -1, 1, 1)  # [1, H, 1, 1]
+        sink = sink.expand(scores.size(0), -1, scores.size(2), -1)  # [B, H, T, 1]
+        scores = torch.cat([scores, sink], dim=-1)  # [B, H, T, T+1]
+
+        weights = scores.softmax(dim=-1)  # [B, H, T, T+1]
+        weights = weights[..., :-1]  # [B, H, T, T]
+        weights = weights.to(kv.dtype)  # [B, H, T, T]
+        return torch.einsum("bhts,bsd->bthd", weights, kv)  # [B, T, H, Dh]
+
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        q, kv = self.queries_and_kv(x)  # [B, T, H, Dh], [B, T, Dh]
+        visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
+        return self.attend(q, kv, visible)  # [B, T, H, Dh]
