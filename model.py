@@ -261,3 +261,6 @@ class MixtureOfExperts:
             w = weights[tokens, slot]  # [X]
             out *= w
             output[rows] += out
+
+        shared = self.shared(x)  # [N, D]
+        output += shared
