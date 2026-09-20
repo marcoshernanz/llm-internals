@@ -259,7 +259,7 @@ class MixtureOfExperts(nn.Module):
             tokens = x[rows]  # [X, D]
             out = expert(tokens)  # [X, D]
             w = weights[rows, slot]  # [X]
-            out *= w
+            out *= w[:, None]
             output[rows] += out
 
         shared = self.shared(x)  # [N, D]
