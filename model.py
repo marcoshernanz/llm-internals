@@ -258,7 +258,7 @@ class MixtureOfExperts(nn.Module):
             rows, slot = torch.where(experts == i)  # [X], [X]
             tokens = x[rows]  # [X, D]
             out = expert(tokens)  # [X, D]
-            w = weights[tokens, slot]  # [X]
+            w = weights[rows, slot]  # [X]
             out *= w
             output[rows] += out
 
