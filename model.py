@@ -292,4 +292,4 @@ class Transformer(nn.Module):
         self.out_proj = Linear(config.hidden_size, config.vocab_size)
 
     def forward(self, x: Tensor):
-        pass
+        embeddings = self.embed(x)
