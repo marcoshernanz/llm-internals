@@ -38,6 +38,7 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, std=INIT_STD)
     if isinstance(module, Attention):
         nn.init.normal_(module.attn_sink, std=INIT_STD)
+        nn.init.normal_(module.o_group_weight, std=INIT_STD)
     if isinstance(module, Gate):
         nn.init.normal_(module.weight, std=INIT_STD)
 
@@ -157,9 +158,9 @@ class Attention(nn.Module):
         self.kv_proj = Linear(config.hidden_size, self.head_dim)
         self.kv_norm = RMSNorm(self.head_dim)
         self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
-        self.o_group_proj = Linear(
-            self.num_heads * self.head_dim // self.o_groups, self.o_groups * self.o_lora_rank
-        )
+        group_width = self.num_heads * self.head_dim // self.o_groups  # (H/G)*Dh
+        group_weight = torch.empty(self.o_groups, self.o_lora_rank, group_width)
+        self.o_group_weight = nn.Parameter(group_weight)  # [G, Do, (H/G)*Dh]
         self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
         freqs_cis = rope_freqs_cis(
@@ -199,10 +200,7 @@ class Attention(nn.Module):
         o = o.flatten(-2)  # [B, T, H*Dh]
         o = o.unflatten(-1, (self.o_groups, -1))  # [B, T, G, (H/G)*Dh]
 
-        group_weight = self.o_group_proj.weight  # [G*Do, (H/G)*Dh]
-        group_weight = group_weight.view(self.o_groups, self.o_lora_rank, -1)  # [G, Do, (H/G)*Dh]
-        o = torch.einsum("btgd,grd->btgr", o, group_weight)  # [B, T, G, Do]
-
+        o = torch.einsum("btgd,grd->btgr", o, self.o_group_weight)  # [B, T, G, Do]
         o = o.flatten(-2)  # [B, T, G*Do]
         return self.o_proj(o)  # [B, T, D]
 
