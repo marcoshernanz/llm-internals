@@ -288,6 +288,7 @@ class Transformer(nn.Module):
 
         self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
         self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_blocks))
+        self.out_norm = RMSNorm(config.hidden_size)
 
     def forward(self, x: Tensor):
         pass
