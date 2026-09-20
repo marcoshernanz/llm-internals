@@ -234,3 +234,11 @@ class Gate(nn.Module):
         weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
         weights = weights * self.routed_scaling_factor  # [N, K]
         return weights, experts
+
+
+class MixtureOfExperts:
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
