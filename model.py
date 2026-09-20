@@ -143,6 +143,7 @@ class Attention(nn.Module):
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
         mask = torch.ones(config.max_position_embeddings, config.max_position_embeddings).tril()
+        mask = mask.masked_fill(mask, -torch.inf)
         self.mask = nn.Buffer(mask)
 
     def forward(self, x: Tensor):
@@ -160,5 +161,4 @@ class Attention(nn.Module):
 
         q = q.transpose(1, 2)  # [B, H, T, Dh]
         scores = q @ kv.mT  # [B, H, T, T]
-
         scores /= 1 / math.sqrt(self.head_dim)
