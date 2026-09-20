@@ -10,6 +10,9 @@ Shape letters used in the comments:
     Dq  width of the query bottleneck (q_lora_rank)
     Do  width of the output bottleneck, one per group (o_lora_rank)
     G   groups of heads in the output projection (o_groups)
+    E   routed experts (n_routed_experts)
+    K   routed experts active per token (num_experts_per_tok)
+    N   tokens, batch and time flattened together
 """
 
 import math
@@ -35,6 +38,8 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, std=INIT_STD)
     if isinstance(module, Attention):
         nn.init.normal_(module.attn_sink, std=INIT_STD)
+    if isinstance(module, Gate):
+        nn.init.normal_(module.weight, std=INIT_STD)
 
 
 def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: float) -> Tensor:
@@ -138,27 +143,26 @@ class FeedForward(nn.Module):
 
 
 class Gate(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.num_active_experts = config.num_active_experts
+        self.n_routed_experts = config.n_routed_experts
+        self.num_experts_per_tok = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
 
-        self.weight = Linear(config.hidden_size, config.num_experts)
-        self.bias = nn.Buffer(torch.zeros(config.num_experts))
+        self.weight = nn.Parameter(torch.empty(self.n_routed_experts, config.hidden_size))  # [E, D]
+        self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
 
-    def forward(self, x: Tensor):
-        scores = self.weight(x)  # [N, E]
-        scores.float()
-        scores = torch.sqrt(F.softplus(scores))
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
+        scores = F.linear(x.float(), self.weight.float())  # [N, E], routing runs in float32
+        scores = F.softplus(scores).sqrt()  # [N, E]
 
-        biased_scores = scores + self.bias
-        selected = torch.topk(biased_scores, self.num_active_experts).indices  # [N, K]
+        biased = scores + self.bias  # [N, E], the bias only moves the choice
+        experts = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
 
-        scores = scores.gather(-1, selected)  # [N, K]
-        scores /= scores.sum(dim=-1) + NORM_EPS
-        scores *= self.routed_scaling_factor
-        scores.to(x.dtype)
-        return selected, scores
+        weights = scores.gather(-1, experts)  # [N, K], the raw scores, without the bias
+        weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
+        weights = weights * self.routed_scaling_factor  # [N, K]
+        return weights, experts
 
 
 class Attention(nn.Module):
