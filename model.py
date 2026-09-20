@@ -137,6 +137,14 @@ class FeedForward(nn.Module):
         return self.down_proj(hidden.to(x.dtype))  # [..., D]
 
 
+class Gate(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
+
+
 class Attention(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
