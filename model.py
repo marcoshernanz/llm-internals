@@ -149,6 +149,10 @@ class Attention(nn.Module):
         self.kv_norm = RMSNorm(self.head_dim)
         self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
         self.out_proj = Linear(self.num_heads * self.head_dim, config.hidden_size)
+        self.o_group_proj = Linear(
+            self.num_heads * self.head_dim // config.o_groups, config.o_groups * config.o_lora_rank
+        )
+        self.o_proj = Linear(config.o_groups * config.o_lora_rank, config.hidden_size)
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
