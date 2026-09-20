@@ -153,7 +153,7 @@ class Gate(nn.Module):
         biased_scores = scores + self.bias
         selected = torch.topk(biased_scores, self.num_active_experts).indices  # [N, K]
 
-        scores = scores[selected]  # [N, K]
+        scores = scores.gather(-1, selected)  # [N, K]
         scores /= scores.sum(dim=-1) + NORM_EPS
         scores *= self.routed_scaling_factor
         return scores
