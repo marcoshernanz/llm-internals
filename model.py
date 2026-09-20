@@ -251,8 +251,8 @@ class MixtureOfExperts:
     def forward(self, x: Tensor):
         batch_size, seq_len, _ = x.size()
         x = x.view(batch_size * seq_len, -1)  # [N, D]
-        w, e = self.gate(x)  # [N, K], [N, K]
+        weights, experts = self.gate(x)  # [N, K], [N, K]
 
         output = torch.zeros(batch_size * seq_len, self.hidden_size, dtype=torch.float32)
-        for index, expert in enumerate(self.experts):
-            pass
+        for i, expert in enumerate(self.experts):
+            rows, slot = torch.where(experts == i)
