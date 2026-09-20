@@ -286,5 +286,7 @@ class Transformer(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
 
+        self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
+
     def forward(self, x: Tensor):
         pass
