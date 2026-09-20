@@ -192,7 +192,4 @@ class Attention(nn.Module):
         q, kv = self.queries_and_kv(x)  # [B, T, H, Dh], [B, T, Dh]
         visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
         attention = self.attend(q, kv, visible)  # [B, T, H, Dh]
-        attention = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
-        attention = attention.flatten(-2)
-        attention = self.out_proj(attention)  # [B, T, D]
-        return attention
+        o = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
