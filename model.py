@@ -274,6 +274,7 @@ class Block(nn.Module):
         self.attention_norm = RMSNorm(config.hidden_size)
         self.attention = Attention(config)
         self.ffn_norm = RMSNorm(config.hidden_size)
+        self.ffn = MixtureOfExperts(config)
 
     def forward(self, x: Tensor):
         pass
