@@ -148,6 +148,7 @@ class Gate(nn.Module):
 
     def forward(self, x: Tensor):
         scores = self.weight(x)  # [N, E]
+        scores.float()
         scores = torch.sqrt(F.softplus(scores))
 
         biased_scores = scores + self.bias
@@ -156,7 +157,8 @@ class Gate(nn.Module):
         scores = scores.gather(-1, selected)  # [N, K]
         scores /= scores.sum(dim=-1) + NORM_EPS
         scores *= self.routed_scaling_factor
-        return scores
+        scores.to(x.dtype)
+        return selected, scores
 
 
 class Attention(nn.Module):
