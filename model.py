@@ -277,4 +277,4 @@ class Block(nn.Module):
         self.ffn = MixtureOfExperts(config)
 
     def forward(self, x: Tensor):
-        pass
+        x = x + self.attention(self.attention_norm(x))
