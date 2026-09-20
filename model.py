@@ -157,3 +157,5 @@ class Attention(nn.Module):
 
         q = q.transpose(1, 2)
         scores = q @ kv.mT
+
+        scores /= 1 / math.sqrt(self.head_dim)
