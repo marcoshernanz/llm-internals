@@ -148,6 +148,7 @@ class Attention(nn.Module):
         self.kv_proj = Linear(config.hidden_size, self.head_dim)
         self.kv_norm = RMSNorm(self.head_dim)
         self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
+        self.out_proj = Linear(self.num_heads * self.head_dim, config.hidden_size)
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
@@ -188,3 +189,5 @@ class Attention(nn.Module):
         visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
         attention = self.attend(q, kv, visible)  # [B, T, H, Dh]
         attention = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
+        attention = attention.flatten(-2)
+        attention = self.out_proj(attention)  # [B, T, D]
