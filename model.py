@@ -199,3 +199,4 @@ class Attention(nn.Module):
         o = o.flatten(-2)  # [B, T, H*Dh]
         o = o.unflatten(-1, (self.o_groups, -1))  # [B, T, G, (H/G)*Dh]
         w = self.o_group_proj.weight.view(self.o_groups, self.o_lora_rank, -1)  # [G, r, (H/G)*Dh]
+        o = torch.einsum("btgd,grd->btgr", o, w)  # [B, T, G, r]
