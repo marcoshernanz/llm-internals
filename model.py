@@ -142,7 +142,7 @@ class Attention(nn.Module):
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
-    def queries_and_kv(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
+    def forward(self, x: Tensor):
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
 
         q = self.q_down_proj(x)  # [B, T, Dq]
@@ -154,7 +154,3 @@ class Attention(nn.Module):
         kv = self.kv_proj(x)  # [B, T, Dh]
         kv = self.kv_norm(kv)  # [B, T, Dh]
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
-        return q, kv
-
-    def forward(self, x: Tensor):
-        q, kv = self.queries_and_kv(x)
