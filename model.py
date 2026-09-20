@@ -239,6 +239,8 @@ class Gate(nn.Module):
 class MixtureOfExperts:
     def __init__(self, config: Config):
         super().__init__()
+        self.hidden_size = config.hidden_size
+
         self.gate = Gate(config)
         self.experts = nn.ModuleList(
             FeedForward(config.hidden_size, config.moe_intermediate_size)
@@ -250,3 +252,5 @@ class MixtureOfExperts:
         batch_size, seq_len, _ = x.size()
         x = x.view(batch_size * seq_len, -1)  # [N, D]
         w, e = self.gate(x)  # [N, K], [N, K]
+
+        output = torch.zeros(batch_size * seq_len, self.hidden_size)
