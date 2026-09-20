@@ -7,6 +7,10 @@ from dataclasses import dataclass
 class Config:
     hidden_size: int  # D
     moe_intermediate_size: int  # F of every expert
+    n_routed_experts: int  # E, experts a token may be routed to
+    n_shared_experts: int  # experts that run for every token
+    num_experts_per_tok: int  # K, routed experts active per token
+    routed_scaling_factor: float  # scales the routed weights after normalizing
     num_attention_heads: int  # H, query heads over one shared KV vector
     head_dim: int  # Dh, also the width of the KV vector
     qk_rope_head_dim: int  # Dr
@@ -21,6 +25,10 @@ class Config:
 V41_FLASH_CONFIG = Config(
     hidden_size=5120,
     moe_intermediate_size=2304,
+    n_routed_experts=384,
+    n_shared_experts=1,
+    num_experts_per_tok=6,
+    routed_scaling_factor=1.5,
     num_attention_heads=64,
     head_dim=512,
     qk_rope_head_dim=64,
@@ -35,6 +43,10 @@ V41_FLASH_CONFIG = Config(
 TINY_CONFIG = Config(
     hidden_size=64,
     moe_intermediate_size=128,
+    n_routed_experts=8,
+    n_shared_experts=1,
+    num_experts_per_tok=2,
+    routed_scaling_factor=1.5,
     num_attention_heads=4,
     head_dim=32,
     qk_rope_head_dim=8,
