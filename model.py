@@ -136,6 +136,7 @@ class Attention(nn.Module):
         self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
         self.kv_proj = Linear(config.hidden_size, self.head_dim)
         self.kv_norm = RMSNorm(self.head_dim)
+        self.sink = Linear(config.hidden_size, config.num_attention_heads)
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
