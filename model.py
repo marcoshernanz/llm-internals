@@ -35,7 +35,7 @@ SLIDING_WINDOW = 128
 
 
 def init_weights(module: nn.Module) -> None:
-    if isinstance(module, Linear):
+    if isinstance(module, (Linear, Embedding)):
         nn.init.normal_(module.weight, std=INIT_STD)
     if isinstance(module, Attention):
         nn.init.normal_(module.attn_sink, std=INIT_STD)
@@ -113,12 +113,12 @@ class Linear(nn.Module):
 
 
 class Embedding(nn.Module):
-    def __init__(self, vocab_size: int, hidden_dim: int):
+    def __init__(self, vocab_size: int, dim: int) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.empty(vocab_size, hidden_dim))
+        self.weight = nn.Parameter(torch.empty(vocab_size, dim))  # [vocab, dim]
 
-    def forward(self, x: Tensor):
-        return self.weight[x]
+    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
+        return self.weight[ids]  # [B, T, D]
 
 
 class RMSNorm(nn.Module):
@@ -277,35 +277,30 @@ class MixtureOfExperts(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         super().__init__()
-
-        self.attention_norm = RMSNorm(config.hidden_size)
-        self.attention = Attention(config)
+        self.attn_norm = RMSNorm(config.hidden_size)
+        self.attn = Attention(config)
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
 
-    def forward(self, x: Tensor):
-        x = x + self.attention(self.attention_norm(x))
-        x = x + self.ffn(self.ffn_norm(x))
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        x = x + self.attn(self.attn_norm(x))  # [B, T, D]
+        x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
         return x
 
 
 class Transformer(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         super().__init__()
-
-        self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_blocks))
+        self.embed = Embedding(config.vocab_size, config.hidden_size)
+        self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
         self.out_norm = RMSNorm(config.hidden_size)
-        self.out_proj = Linear(config.hidden_size, config.vocab_size)
+        self.head = Linear(config.hidden_size, config.vocab_size)
 
-    def forward(self, x: Tensor):
-        x = self.embed(x)
-
+    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
+        x = self.embed(ids)  # [B, T, D]
         for block in self.blocks:
-            x = block(x)
-
-        x = self.out_norm(x)
-        x = self.out_proj(x)
-        return x
+            x = block(x)  # [B, T, D]
+        x = self.out_norm(x)  # [B, T, D]
+        return self.head(x)  # [B, T, vocab]
