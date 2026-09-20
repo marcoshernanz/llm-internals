@@ -6,6 +6,8 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Config:
     hidden_size: int  # D
+    vocab_size: int  # rows of the embedding and of the head
+    num_hidden_layers: int  # blocks in the stack
     moe_intermediate_size: int  # F of every expert
     n_routed_experts: int  # E, experts a token may be routed to
     n_shared_experts: int  # experts that run for every token
@@ -24,6 +26,8 @@ class Config:
 
 V41_FLASH_CONFIG = Config(
     hidden_size=5120,
+    vocab_size=129280,
+    num_hidden_layers=40,
     moe_intermediate_size=2304,
     n_routed_experts=384,
     n_shared_experts=1,
@@ -42,6 +46,8 @@ V41_FLASH_CONFIG = Config(
 
 TINY_CONFIG = Config(
     hidden_size=64,
+    vocab_size=256,
+    num_hidden_layers=2,
     moe_intermediate_size=128,
     n_routed_experts=8,
     n_shared_experts=1,
