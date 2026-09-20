@@ -13,6 +13,7 @@ Shape letters used in the comments:
     E   routed experts (n_routed_experts)
     K   routed experts active per token (num_experts_per_tok)
     N   tokens, batch and time flattened together
+    X   tokens routed to one expert, different for each
 """
 
 import math
@@ -224,45 +225,43 @@ class Gate(nn.Module):
         self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
-        scores = F.linear(x.float(), self.weight.float())  # [N, E], routing runs in float32
+        scores = F.linear(x.float(), self.weight.float())  # [N, E]
         scores = F.softplus(scores).sqrt()  # [N, E]
 
-        biased = scores + self.bias  # [N, E], the bias only moves the choice
-        experts = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
+        biased = scores + self.bias  # [N, E]
+        expert_ids = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
 
-        weights = scores.gather(-1, experts)  # [N, K], the raw scores, without the bias
+        weights = scores.gather(-1, expert_ids)  # [N, K]
         weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
         weights = weights * self.routed_scaling_factor  # [N, K]
-        return weights, experts
+        return weights, expert_ids
 
 
 class MixtureOfExperts(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.hidden_size = config.hidden_size
+        shared_size = config.n_shared_experts * config.moe_intermediate_size
 
         self.gate = Gate(config)
         self.experts = nn.ModuleList(
             FeedForward(config.hidden_size, config.moe_intermediate_size)
             for _ in range(config.n_routed_experts)
         )
-        self.shared = FeedForward(config.hidden_size, config.moe_intermediate_size)
+        self.shared_expert = FeedForward(config.hidden_size, shared_size)
 
-    def forward(self, x: Tensor):
-        batch_size, seq_len, _ = x.size()
-        x = x.view(batch_size * seq_len, -1)  # [N, D]
-        weights, experts = self.gate(x)  # [N, K], [N, K]
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        tokens = x.flatten(0, 1)  # [N, D]
+        weights, expert_ids = self.gate(tokens)  # [N, K], [N, K]
 
-        output = torch.zeros(batch_size * seq_len, self.hidden_size, dtype=torch.float32)  # [N, D]
+        routed = torch.zeros_like(tokens, dtype=torch.float32)  # [N, D]
         for i, expert in enumerate(self.experts):
-            rows, slot = torch.where(experts == i)  # [X], [X]
-            tokens = x[rows]  # [X, D]
-            out = expert(tokens)  # [X, D]
-            w = weights[rows, slot]  # [X]
-            out *= w[:, None]
-            output[rows] += out
+            rows, slot = torch.where(expert_ids == i)  # [X], [X]
+            if rows.numel() == 0:
+                continue
+            expert_out = expert(tokens[rows])  # [X, D]
+            weight = weights[rows, slot]  # [X]
+            routed[rows] += expert_out * weight[:, None]  # [X, D]
 
-        shared = self.shared(x)  # [N, D]
-        output += shared
-        output = output.view(batch_size, seq_len, -1)
-        return output
+        out = routed + self.shared_expert(tokens)  # [N, D]
+        out = out.to(x.dtype)  # [N, D]
+        return out.unflatten(0, (x.size(0), x.size(1)))  # [B, T, D]
