@@ -257,4 +257,4 @@ class MixtureOfExperts:
         for i, expert in enumerate(self.experts):
             rows, slot = torch.where(experts == i)
             tokens = x[rows]
-            output = expert(tokens)
+            out = expert(tokens)
