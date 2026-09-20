@@ -142,6 +142,7 @@ class Attention(nn.Module):
         self.head_dim = config.head_dim
         self.softmax_scale = self.head_dim**-0.5
         self.o_groups = config.o_groups
+        self.o_lora_rank = config.o_lora_rank
 
         self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
         self.q_norm = RMSNorm(config.q_lora_rank)
@@ -151,9 +152,9 @@ class Attention(nn.Module):
         self.attn_sink = nn.Parameter(torch.empty(self.num_heads, dtype=torch.float32))  # [H]
         self.out_proj = Linear(self.num_heads * self.head_dim, config.hidden_size)
         self.o_group_proj = Linear(
-            self.num_heads * self.head_dim // self.o_groups, self.o_groups * config.o_lora_rank
+            self.num_heads * self.head_dim // self.o_groups, self.o_groups * self.o_lora_rank
         )
-        self.o_proj = Linear(self.o_groups * config.o_lora_rank, config.hidden_size)
+        self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
@@ -194,5 +195,7 @@ class Attention(nn.Module):
         visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
         attention = self.attend(q, kv, visible)  # [B, T, H, Dh]
         o = apply_partial_rope(attention, self.freqs_cis[: x.size(1)], inverse=True)
+
         o = o.flatten(-2)  # [B, T, H*Dh]
         o = o.unflatten(-1, (self.o_groups, -1))  # [B, T, G, (H/G)*Dh]
+        w = self.o_group_proj.weight.view(self.o_groups, self.o_lora_rank, -1)  # [G, r, (H/G)*Dh]
