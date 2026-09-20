@@ -296,3 +296,5 @@ class Transformer(nn.Module):
 
         for block in self.blocks:
             x = block(x)
+
+        x = self.out_norm(x)
