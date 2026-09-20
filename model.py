@@ -140,13 +140,17 @@ class FeedForward(nn.Module):
 class Gate(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
+        self.num_active_experts = config.num_active_experts
+
         self.weight = Linear(config.hidden_size, config.num_experts)
         self.bias = nn.Buffer(torch.zeros(config.num_experts))
 
     def forward(self, x: Tensor):
         scores = self.weight(x)  # [..., E]
         scores = torch.sqrt(F.softplus(scores))
+
         biased_scores = scores + self.bias
+        torch.topk(biased_scores, self.num_active_experts)
 
 
 class Attention(nn.Module):
