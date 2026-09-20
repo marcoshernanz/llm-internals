@@ -164,3 +164,7 @@ class Attention(nn.Module):
         scores = q @ kv.mT  # [B, H, T, T]
         scores /= 1 / math.sqrt(self.head_dim)
         scores += self.mask
+
+        sink = self.sink(x)  # [B, T, H]
+        sink = sink.mT  # [B, H, T]
+        scores = scores.exp() / (sink + scores.exp().sum(dim=-1))
