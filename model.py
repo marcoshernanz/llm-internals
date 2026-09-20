@@ -145,6 +145,7 @@ class Gate(nn.Module):
 
     def forward(self, x: Tensor):
         scores = self.weight(x)  # [..., E]
+        scores += self.bias
 
 
 class Attention(nn.Module):
