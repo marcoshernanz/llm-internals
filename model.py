@@ -141,6 +141,7 @@ class Gate(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.num_active_experts = config.num_active_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
 
         self.weight = Linear(config.hidden_size, config.num_experts)
         self.bias = nn.Buffer(torch.zeros(config.num_experts))
@@ -154,6 +155,7 @@ class Gate(nn.Module):
 
         scores = scores[selected]  # [N, K]
         scores /= scores.sum(dim=-1) + NORM_EPS
+        scores *= self.routed_scaling_factor
         return scores
 
 
