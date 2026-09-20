@@ -256,3 +256,5 @@ class MixtureOfExperts:
         output = torch.zeros(batch_size * seq_len, self.hidden_size, dtype=torch.float32)
         for i, expert in enumerate(self.experts):
             rows, slot = torch.where(experts == i)
+            tokens = x[rows]
+            output = expert(tokens)
