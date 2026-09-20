@@ -115,10 +115,10 @@ class Linear(nn.Module):
 class Embedding(nn.Module):
     def __init__(self, vocab_size: int, hidden_dim: int):
         super().__init__()
-        weight = nn.Parameter(torch.empty(vocab_size, hidden_dim))
+        self.weight = nn.Parameter(torch.empty(vocab_size, hidden_dim))
 
     def forward(self, x: Tensor):
-        pass
+        return self.weight[x]
 
 
 class RMSNorm(nn.Module):
