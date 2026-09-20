@@ -140,6 +140,8 @@ class FeedForward(nn.Module):
 class Gate(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
+        self.weight = Linear(config.hidden_size, config.num_experts)
+        self.bias = nn.Buffer(torch.zeros(config.num_experts))
 
     def forward(self, x: Tensor):
         pass
