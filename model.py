@@ -168,3 +168,5 @@ class Attention(nn.Module):
         sink = self.sink(x)  # [B, T, H]
         sink = sink.mT  # [B, H, T]
         scores = scores.exp() / (sink + scores.exp().sum(dim=-1))  # [B, H, T, T]
+        kv = kv[:, None]
+        output = scores @ kv  # [B, H, T, Dh]
