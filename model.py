@@ -142,6 +142,9 @@ class Attention(nn.Module):
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
+        mask = torch.ones(config.max_position_embeddings, config.max_position_embeddings).tril()
+        self.mask = nn.Buffer(mask)
+
     def forward(self, x: Tensor):
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
 
