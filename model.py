@@ -142,29 +142,6 @@ class FeedForward(nn.Module):
         return self.down_proj(hidden.to(x.dtype))  # [..., D]
 
 
-class Gate(nn.Module):
-    def __init__(self, config: Config) -> None:
-        super().__init__()
-        self.n_routed_experts = config.n_routed_experts
-        self.num_experts_per_tok = config.num_experts_per_tok
-        self.routed_scaling_factor = config.routed_scaling_factor
-
-        self.weight = nn.Parameter(torch.empty(self.n_routed_experts, config.hidden_size))  # [E, D]
-        self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
-
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
-        scores = F.linear(x.float(), self.weight.float())  # [N, E], routing runs in float32
-        scores = F.softplus(scores).sqrt()  # [N, E]
-
-        biased = scores + self.bias  # [N, E], the bias only moves the choice
-        experts = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
-
-        weights = scores.gather(-1, experts)  # [N, K], the raw scores, without the bias
-        weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
-        weights = weights * self.routed_scaling_factor  # [N, K]
-        return weights, experts
-
-
 class Attention(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -236,3 +213,26 @@ class Attention(nn.Module):
         q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
         o = self.attend(q, kv, visible)  # [B, T, H, Dh]
         return self.project_out(o, freqs_cis)  # [B, T, D]
+
+
+class Gate(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.n_routed_experts = config.n_routed_experts
+        self.num_experts_per_tok = config.num_experts_per_tok
+        self.routed_scaling_factor = config.routed_scaling_factor
+
+        self.weight = nn.Parameter(torch.empty(self.n_routed_experts, config.hidden_size))  # [E, D]
+        self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
+        scores = F.linear(x.float(), self.weight.float())  # [N, E], routing runs in float32
+        scores = F.softplus(scores).sqrt()  # [N, E]
+
+        biased = scores + self.bias  # [N, E], the bias only moves the choice
+        experts = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
+
+        weights = scores.gather(-1, experts)  # [N, K], the raw scores, without the bias
+        weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
+        weights = weights * self.routed_scaling_factor  # [N, K]
+        return weights, experts
