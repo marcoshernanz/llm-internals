@@ -155,7 +155,7 @@ class Attention(nn.Module):
         kv = self.kv_norm(kv)  # [B, T, Dh]
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
 
-        q = q.transpose(1, 2)
-        scores = q @ kv.mT
+        q = q.transpose(1, 2)  # [B, H, T, Dh]
+        scores = q @ kv.mT  # [B, H, T, T]
 
         scores /= 1 / math.sqrt(self.head_dim)
