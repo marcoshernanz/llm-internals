@@ -154,6 +154,7 @@ class Gate(nn.Module):
 
         scores = scores[selected]  # [N, K]
         scores = scores.softmax(dim=-1)
+        return scores
 
 
 class Attention(nn.Module):
