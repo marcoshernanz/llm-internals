@@ -272,6 +272,7 @@ class Block(nn.Module):
         super().__init__()
 
         self.attention_norm = RMSNorm(config.hidden_size)
+        self.attention = Attention(config)
 
     def forward(self, x: Tensor):
         pass
