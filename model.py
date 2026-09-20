@@ -253,8 +253,8 @@ class MixtureOfExperts:
         x = x.view(batch_size * seq_len, -1)  # [N, D]
         weights, experts = self.gate(x)  # [N, K], [N, K]
 
-        output = torch.zeros(batch_size * seq_len, self.hidden_size, dtype=torch.float32)
+        output = torch.zeros(batch_size * seq_len, self.hidden_size, dtype=torch.float32)  # [N, D]
         for i, expert in enumerate(self.experts):
-            rows, slot = torch.where(experts == i)
-            tokens = x[rows]
-            out = expert(tokens)
+            rows, slot = torch.where(experts == i)  # [X], [X]
+            tokens = x[rows]  # [X, D]
+            out = expert(tokens)  # [X, D]
