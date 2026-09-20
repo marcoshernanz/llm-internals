@@ -162,3 +162,4 @@ class Attention(nn.Module):
         q = q.transpose(1, 2)  # [B, H, T, Dh]
         scores = q @ kv.mT  # [B, H, T, T]
         scores /= 1 / math.sqrt(self.head_dim)
+        scores += self.mask
