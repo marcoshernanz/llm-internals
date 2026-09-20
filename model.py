@@ -151,6 +151,7 @@ class Gate(nn.Module):
 
         biased_scores = scores + self.bias
         selected = torch.topk(biased_scores, self.num_active_experts)  # [N, K]
+        scores = scores[selected]
 
 
 class Attention(nn.Module):
