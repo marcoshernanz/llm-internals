@@ -247,4 +247,6 @@ class MixtureOfExperts:
         self.shared = FeedForward(config.hidden_size, config.moe_intermediate_size)
 
     def forward(self, x: Tensor):
-        pass
+        batch_size, seq_len, _ = x.size()
+        x = x.view(batch_size * seq_len, -1)  # [N, D]
+        w, e = self.gate(x)  # [N, K], [N, K]
