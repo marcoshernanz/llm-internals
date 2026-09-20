@@ -146,11 +146,11 @@ class Gate(nn.Module):
         self.bias = nn.Buffer(torch.zeros(config.num_experts))
 
     def forward(self, x: Tensor):
-        scores = self.weight(x)  # [..., E]
+        scores = self.weight(x)  # [N, E]
         scores = torch.sqrt(F.softplus(scores))
 
         biased_scores = scores + self.bias
-        selected = torch.topk(biased_scores, self.num_active_experts)
+        selected = torch.topk(biased_scores, self.num_active_experts)  # [N, K]
 
 
 class Attention(nn.Module):
