@@ -153,7 +153,7 @@ class Gate(nn.Module):
         selected = torch.topk(biased_scores, self.num_active_experts)  # [N, K]
 
         scores = scores[selected]  # [N, K]
-        scores = scores.softmax(dim=-1)
+        scores /= scores.sum(dim=-1) + NORM_EPS
         return scores
 
 
