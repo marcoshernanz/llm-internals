@@ -113,7 +113,7 @@ class Linear(nn.Module):
 
 
 class Embedding(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size: int, hidden_dim: int):
         super().__init__()
 
     def forward(self, x: Tensor):
