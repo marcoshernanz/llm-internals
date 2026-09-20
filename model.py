@@ -138,7 +138,7 @@ class FeedForward(nn.Module):
 
 
 class Gate(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
 
     def forward(self, x: Tensor):
