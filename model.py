@@ -265,3 +265,11 @@ class MixtureOfExperts(nn.Module):
         out = routed + self.shared_expert(tokens)  # [N, D]
         out = out.to(x.dtype)  # [N, D]
         return out.unflatten(0, (x.size(0), x.size(1)))  # [B, T, D]
+
+
+class Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
