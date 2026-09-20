@@ -264,3 +264,5 @@ class MixtureOfExperts:
 
         shared = self.shared(x)  # [N, D]
         output += shared
+        output = output.view(batch_size, seq_len, -1)
+        return output
