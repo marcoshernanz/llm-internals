@@ -146,7 +146,7 @@ class Gate(nn.Module):
     def forward(self, x: Tensor):
         scores = self.weight(x)  # [..., E]
         scores = torch.sqrt(F.softplus(scores))
-        scores += self.bias
+        biased_scores = scores + self.bias
 
 
 class Attention(nn.Module):
