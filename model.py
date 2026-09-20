@@ -240,6 +240,10 @@ class MixtureOfExperts:
     def __init__(self, config: Config):
         super().__init__()
         self.gate = Gate(config)
+        self.ffn = nn.ModuleList(
+            FeedForward(config.hidden_size, config.moe_intermediate_size)
+            for _ in range(config.n_routed_experts)
+        )
 
     def forward(self, x: Tensor):
         pass
