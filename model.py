@@ -311,7 +311,7 @@ def sinkhorn(logits: Tensor):
     logits = logits.exp()
 
     for _ in range(5):
-        logits = logits / logits.sum(dim=-1, keepdim=True)
-        logits = logits / logits.sum(dim=-2, keepdim=True)
+        logits = logits / (logits.sum(dim=-1, keepdim=True) + 0.0001)
+        logits = logits / (logits.sum(dim=-2, keepdim=True) + 0.0001)
 
     return logits.to(dtype=torch.bfloat16)
