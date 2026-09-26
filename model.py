@@ -318,3 +318,11 @@ class Transformer(nn.Module):
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
+
+
+class MHC:
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
