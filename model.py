@@ -344,8 +344,8 @@ class MHC(nn.Module):
         x = self.norm(x)
 
         r = self.w(x)
-        r_pre = r[..., HC_MULT]
-        r_post
+        r_pre = r[..., :HC_MULT]
+        r_post = r[..., HC_MULT : 2 * HC_MULT]
         r_comb
 
         pre = self.a1 * self.w1(x) + self.b1  # [1, N]
