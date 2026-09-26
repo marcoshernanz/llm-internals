@@ -324,7 +324,6 @@ class MHC:
     def __init__(self, config: Config):
         super().__init__()
         self.n = config.n
-        self.size = (2 * self.n) * self.n
 
         self.norm = RMSNorm(self.size)
 
