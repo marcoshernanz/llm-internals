@@ -335,6 +335,10 @@ class MHC:
         self.b2 = nn.Parameter(torch.empty(self.n))
         self.b3 = nn.Parameter(torch.empty(self.n * self.n))
 
+        self.s1 = Linear(self.n * config.hidden_size, self.n)
+        self.s2 = Linear(self.n * config.hidden_size, self.n)
+        self.s3 = Linear(self.n * config.hidden_size, self.n * self.n)
+
     def forward(self, x: Tensor):
         x = x.flatten(-2)
         x = self.norm(x)
