@@ -14,6 +14,7 @@ Shape letters used in the comments:
     K   routed experts active per token (num_experts_per_tok)
     N   tokens, batch and time flattened together
     X   tokens routed to one expert, different for each
+    S   residual streams (hc_mult)
 """
 
 import math
@@ -32,6 +33,8 @@ COMPRESS_ROPE_THETA = 160000.0
 ROPE_BETA_FAST = 32
 ROPE_BETA_SLOW = 1
 SLIDING_WINDOW = 128
+HC_SINKHORN_ITERS = 20
+HC_EPS = 1e-6
 
 
 def init_weights(module: nn.Module) -> None:
@@ -101,6 +104,17 @@ def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tens
     causal = distance >= 0  # [T, T]
     inside_window = distance < window  # [T, T]
     return causal & inside_window  # [T, T]
+
+
+def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
+    mix = logits.float()  # [..., S, S]
+    mix = mix.softmax(dim=-1)
+    mix = mix + HC_EPS
+    mix = mix / (mix.sum(dim=-2, keepdim=True) + HC_EPS)
+    for _ in range(HC_SINKHORN_ITERS - 1):
+        mix = mix / (mix.sum(dim=-1, keepdim=True) + HC_EPS)
+        mix = mix / (mix.sum(dim=-2, keepdim=True) + HC_EPS)
+    return mix  # [..., S, S]
 
 
 class Linear(nn.Module):
@@ -304,14 +318,3 @@ class Transformer(nn.Module):
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
-
-
-def sinkhorn(logits: Tensor):
-    logits = logits.float()
-    logits = logits.exp()
-
-    for _ in range(5):
-        logits = logits / (logits.sum(dim=-1, keepdim=True) + 0.0001)
-        logits = logits / (logits.sum(dim=-2, keepdim=True) + 0.0001)
-
-    return logits.to(dtype=torch.bfloat16)
