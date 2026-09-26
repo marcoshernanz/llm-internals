@@ -325,8 +325,12 @@ class MHC:
         super().__init__()
         self.n = config.n
         self.size = (2 * self.n) * self.n
-        self.proj = Linear(config.hidden_size * self.n, self.size)
+
         self.norm = RMSNorm(self.size)
+
+        self.a1 = nn.Parameter(torch.empty(1))
+        self.a2 = nn.Parameter(torch.empty(1))
+        self.a3 = nn.Parameter(torch.empty(1))
 
     def forward(self, x: Tensor):
         x = x.flatten(-2)
