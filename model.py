@@ -356,3 +356,7 @@ class Transformer(nn.Module):
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
+
+
+def hc_pre(x: Tensor, pre: Tensor) -> Tensor:
+    pass
