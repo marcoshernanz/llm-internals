@@ -361,6 +361,9 @@ class Block(nn.Module):
         self.ffn_hc = HyperConnection(config.hidden_size)
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        residual = x
+        attn_pre, attn_post, attn_comb = self.attn_hc(x)
+
         x = x + self.attn(self.attn_norm(x))  # [B, T, D]
         x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
         return x
