@@ -348,5 +348,7 @@ class MHC:
         b = x[..., 2 * self.n :]
 
         h_pre = self.a1 * self.s1(x) + self.b1  # [1, N]
+        h_pre = torch.sigmoid(h_pre)
         h_post = self.a2 * self.s2(x) + self.b2  # [N, 1]
+        h_post = 2 * torch.sigmoid(h_post)
         h_res = self.a3 * self.s3(x) + self.b3  # [N, N]
