@@ -332,3 +332,7 @@ class MHC:
         x = x.flatten(-2)
         x = self.norm(x)
         x = self.proj(x)
+
+        p = x[..., : self.n]
+        a = x[..., self.n : 2 * self.n]
+        b = x[..., 2 * self.n :]
