@@ -329,9 +329,9 @@ class MHC(nn.Module):
 
         self.norm = RMSNorm(HC_MULT * dim)
 
-        self.a1 = nn.Parameter(torch.full([0], 0.01))
-        self.a2 = nn.Parameter(torch.full([0], 0.01))
-        self.a3 = nn.Parameter(torch.full([0], 0.01))
+        self.a1 = nn.Parameter(torch.full([], 0.01))
+        self.a2 = nn.Parameter(torch.full([], 0.01))
+        self.a3 = nn.Parameter(torch.full([], 0.01))
 
         self.b1 = nn.Parameter(torch.zeros(HC_MULT))
         self.b2 = nn.Parameter(torch.zeros(HC_MULT))
