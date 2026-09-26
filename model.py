@@ -339,7 +339,7 @@ class MHC(nn.Module):
         self.s2 = Linear(self.n * config.hidden_size, self.n)
         self.s3 = Linear(self.n * config.hidden_size, self.n * self.n)
 
-    def forward(self, x: Tensor, layer: Layer):
+    def forward(self, x: Tensor):
         x = x.flatten(-2)
         x = self.norm(x)
 
