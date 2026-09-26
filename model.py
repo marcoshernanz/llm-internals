@@ -385,6 +385,8 @@ class Transformer(nn.Module):
 
     def forward(self, ids: Tensor) -> Tensor:  # [B, T]
         x = self.embed(ids)  # [B, T, D]
+        x = x.copy(HC_MULT, dim=-1)
+
         for block in self.blocks:
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
