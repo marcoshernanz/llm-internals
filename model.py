@@ -320,7 +320,7 @@ class Transformer(nn.Module):
         return self.head(x)  # [B, T, vocab]
 
 
-class MHC:
+class MHC(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.n = config.n
