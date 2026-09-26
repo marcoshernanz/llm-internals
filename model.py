@@ -353,26 +353,26 @@ class HyperConnection(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
+        self.attn_hc = HyperConnection(config.hidden_size)
         self.attn_norm = RMSNorm(config.hidden_size)
         self.attn = Attention(config)
-        self.attn_hc = HyperConnection(config.hidden_size)
+        self.ffn_hc = HyperConnection(config.hidden_size)
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
-        self.ffn_hc = HyperConnection(config.hidden_size)
 
-    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
-        residual = x
-        attn_pre, attn_post, attn_comb = self.attn_hc(x)
-        x = hc_pre(x, attn_pre)
-        out = x + self.attn(self.attn_norm(x))  # [B, T, D]
-        x = hc_post(out, residual, attn_post, attn_comb)
+    def forward(self, x: Tensor, pre: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, S, D], [B, T, S]
+        attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
+        h = hc_pre(x, pre)  # [B, T, D]
+        h = self.attn_norm(h)  # [B, T, D]
+        h = self.attn(h)  # [B, T, D]
+        x = hc_post(h, x, attn_post, attn_comb)  # [B, T, S, D]
 
-        residual = x
-        ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)
-        x = hc_pre(x, ffn_pre)
-        out = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
-        x = hc_post(out, residual, ffn_post, ffn_comb)
-        return x
+        ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
+        h = hc_pre(x, attn_pre)  # [B, T, D]
+        h = self.ffn_norm(h)  # [B, T, D]
+        h = self.ffn(h)  # [B, T, D]
+        x = hc_post(h, x, ffn_post, ffn_comb)  # [B, T, S, D]
+        return x, ffn_pre
 
 
 class Transformer(nn.Module):
@@ -385,12 +385,12 @@ class Transformer(nn.Module):
 
     def forward(self, ids: Tensor) -> Tensor:  # [B, T]
         x = self.embed(ids)  # [B, T, D]
-        x = x.copy(HC_MULT, dim=-1)
-
+        x = x[:, :, None, :]  # [B, T, 1, D]
+        x = x.expand(-1, -1, HC_MULT, -1)  # [B, T, S, D]
+        pre = torch.zeros(x.shape[:-1], dtype=torch.float32, device=x.device)  # [B, T, S]
+        pre[..., 0] = 1.0  # [B, T, S]
         for block in self.blocks:
-            x = block(x)  # [B, T, D]
-
-        x = hc_pre(x, pre)
-
+            x, pre = block(x, pre)  # [B, T, S, D], [B, T, S]
+        x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
