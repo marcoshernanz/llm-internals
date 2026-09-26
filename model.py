@@ -304,3 +304,7 @@ class Transformer(nn.Module):
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
+
+
+def sinkhorn(logits: Tensor):
+    pass
