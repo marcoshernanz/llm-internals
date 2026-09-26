@@ -325,7 +325,7 @@ class MHC(nn.Module):
         super().__init__()
         self.n = config.n
 
-        self.norm = RMSNorm(self.size)
+        self.norm = RMSNorm(self.n * config.hidden_size)
 
         self.a1 = nn.Parameter(torch.empty(1))
         self.a2 = nn.Parameter(torch.empty(1))
