@@ -333,9 +333,9 @@ class MHC(nn.Module):
         self.a2 = nn.Parameter(torch.full([0], 0.01))
         self.a3 = nn.Parameter(torch.full([0], 0.01))
 
-        self.b1 = nn.Parameter(torch.empty(HC_MULT))
-        self.b2 = nn.Parameter(torch.empty(HC_MULT))
-        self.b3 = nn.Parameter(torch.empty(HC_MULT * HC_MULT))
+        self.b1 = nn.Parameter(torch.zeros(HC_MULT))
+        self.b2 = nn.Parameter(torch.zeros(HC_MULT))
+        self.b3 = nn.Parameter(torch.zeros(HC_MULT * HC_MULT))
 
         self.s1 = Linear(HC_MULT * dim, HC_MULT)
         self.s2 = Linear(HC_MULT * dim, HC_MULT)
