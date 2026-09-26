@@ -325,7 +325,7 @@ class HyperConnection(nn.Module):
         comb = comb * self.scale[2] + comb_bias  # [B, T, S*S]
         comb = comb.unflatten(-1, (HC_MULT, HC_MULT))  # [B, T, S, S]
         comb = sinkhorn(comb)  # [B, T, S, S]
-        return pre, post, comb
+        return pre, post, comb  # [B, T, S], [B, T, S], [B, T, S, S]
 
 
 class Block(nn.Module):
