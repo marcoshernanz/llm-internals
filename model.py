@@ -235,10 +235,9 @@ class Attention(nn.Module):
         return q, kv
 
     def attend(self, q: Tensor, kv: Tensor, visible: Tensor) -> Tensor:  # [B, T, H, Dh], [B, T, Dh]
-        scores = torch.einsum("bthd,bsd->bhts", q, kv)  # [B, H, T, T]
+        scores = einsum32("bthd,bsd->bhts", q, kv)  # [B, H, T, T]
         scores = scores * self.softmax_scale  # [B, H, T, T]
         scores = scores.masked_fill(~visible, -torch.inf)  # [B, H, T, T]
-        scores = scores.float()
 
         sink = self.attn_sink.view(1, -1, 1, 1)  # [1, H, 1, 1]
         sink = sink.expand(scores.size(0), -1, scores.size(2), -1)  # [B, H, T, 1]
