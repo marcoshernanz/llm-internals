@@ -123,7 +123,7 @@ def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, S, D], [B, T, S]
 
 
 def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
-    out = torch.einsum("btd,bts->btds", out, post)
+    out = torch.einsum("btd,bts->btsd", out, post)
     residual = torch.einsum("btds,btss->btds", residual, comb)
     return out + residual
 
