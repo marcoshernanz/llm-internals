@@ -337,7 +337,7 @@ class MHC(nn.Module):
         self.b2 = nn.Parameter(torch.zeros(HC_MULT))
         self.b3 = nn.Parameter(torch.zeros(HC_MULT * HC_MULT))
 
-        self.w = Linear(HC_MULT * dim, (2 * HC_MULT) * HC_MULT)
+        self.w = Linear(HC_MULT * dim, (2 + HC_MULT) * HC_MULT)
 
     def forward(self, x: Tensor):
         x = x.flatten(-2)
