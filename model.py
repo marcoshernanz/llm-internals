@@ -352,3 +352,4 @@ class MHC:
         h_post = self.a2 * self.s2(x) + self.b2  # [N, 1]
         h_post = 2 * torch.sigmoid(h_post)
         h_res = self.a3 * self.s3(x) + self.b3  # [N, N]
+        h_res = sinkhorn(h_res)
