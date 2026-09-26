@@ -117,9 +117,9 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
     return mix  # [..., S, S]
 
 
-def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
+def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, S, D], [B, T, S]
     x.float()
-    return torch.einsum("btdf,bts->btd", x, pre)
+    return torch.einsum("btsd,bts->btd", x, pre)
 
 
 def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
