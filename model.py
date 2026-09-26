@@ -310,7 +310,7 @@ def sinkhorn(logits: Tensor):
     logits = logits.exp()
 
     for _ in range(5):
-        logits /= logits.mean(dim=-1, keepdim=True)
-        logits /= logits.mean(dim=-2, keepdim=True)
+        logits /= logits.sum(dim=-1, keepdim=True)
+        logits /= logits.sum(dim=-2, keepdim=True)
 
     return logits
