@@ -348,11 +348,11 @@ class MHC(nn.Module):
         r_post = r[..., HC_MULT : 2 * HC_MULT]
         r_comb = r[..., 2 * HC_MULT :]
 
-        pre = self.a1 * self.w1(x) + self.b1  # [1, N]
+        pre = self.a1 * r_pre + self.b1  # [1, N]
         pre = torch.sigmoid(pre)
-        post = self.a2 * self.w2(x) + self.b2  # [N, 1]
+        post = self.a2 * r_post + self.b2  # [N, 1]
         post = 2 * torch.sigmoid(post)
-        comb = self.a3 * self.w3(x) + self.b3  # [N, N]
+        comb = self.a3 * r_comb + self.b3  # [N, N]
         comb = comb.unflatten(-1, (HC_MULT, HC_MULT))
         comb = sinkhorn(comb)
 
