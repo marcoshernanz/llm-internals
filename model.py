@@ -117,6 +117,15 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
     return mix  # [..., S, S]
 
 
+def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
+    x.float()
+    return torch.einsum("btdf,bts->btd", x, pre)
+
+
+def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
+    pass
+
+
 def rms_norm(x: Tensor, eps: float = NORM_EPS) -> Tensor:  # [..., dim]
     x32 = x.float()  # [..., dim]
     mean_square = x32.square().mean(dim=-1, keepdim=True)  # [..., 1]
@@ -356,12 +365,3 @@ class Transformer(nn.Module):
             x = block(x)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
-
-
-def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
-    x.float()
-    return torch.einsum("btdf,bts->btd", x, pre)
-
-
-def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
-    pass
