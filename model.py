@@ -124,6 +124,8 @@ def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
 
 def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
     out = torch.einsum("btd,bts->btds", out, post)
+    residual = torch.einsum("btds,btss->btds", residual, comb)
+    return out + residual
 
 
 def rms_norm(x: Tensor, eps: float = NORM_EPS) -> Tensor:  # [..., dim]
