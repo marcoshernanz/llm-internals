@@ -364,7 +364,7 @@ class Block(nn.Module):
         residual = x
         attn_pre, attn_post, attn_comb = self.attn_hc(x)
 
-        x = x + self.attn(self.attn_norm(x))  # [B, T, D]
+        x = x + self.attn(self.attn_norm(hc_pre(x, attn_pre)))  # [B, T, D]
         x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
         return x
 
