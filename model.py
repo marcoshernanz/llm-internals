@@ -355,6 +355,7 @@ class Block(nn.Module):
         super().__init__()
         self.attn_norm = RMSNorm(config.hidden_size)
         self.attn = Attention(config)
+        self.attn_hc = HyperConnection(config.hidden_size)
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
 
