@@ -346,7 +346,7 @@ class MHC(nn.Module):
         r = self.w(x)
         r_pre = r[..., :HC_MULT]
         r_post = r[..., HC_MULT : 2 * HC_MULT]
-        r_comb
+        r_comb = r[..., 2 * HC_MULT :]
 
         pre = self.a1 * self.w1(x) + self.b1  # [1, N]
         pre = torch.sigmoid(pre)
