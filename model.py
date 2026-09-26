@@ -337,13 +337,16 @@ class MHC(nn.Module):
         self.b2 = nn.Parameter(torch.zeros(HC_MULT))
         self.b3 = nn.Parameter(torch.zeros(HC_MULT * HC_MULT))
 
-        self.w1 = Linear(HC_MULT * dim, HC_MULT)
-        self.w2 = Linear(HC_MULT * dim, HC_MULT)
-        self.w3 = Linear(HC_MULT * dim, HC_MULT * HC_MULT)
+        self.w = Linear(HC_MULT * dim, (2 * HC_MULT) * HC_MULT)
 
     def forward(self, x: Tensor):
         x = x.flatten(-2)
         x = self.norm(x)
+
+        r = self.w(x)
+        r_pre = r[..., HC_MULT]
+        r_post
+        r_comb
 
         pre = self.a1 * self.w1(x) + self.b1  # [1, N]
         pre = torch.sigmoid(pre)
