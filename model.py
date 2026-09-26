@@ -45,10 +45,6 @@ def init_weights(module: nn.Module) -> None:
     if isinstance(module, Attention):
         nn.init.normal_(module.attn_sink, std=INIT_STD)
         nn.init.normal_(module.o_group_weight, std=INIT_STD)
-    if isinstance(module, Gate):
-        nn.init.normal_(module.weight, std=INIT_STD)
-    if isinstance(module, HyperConnection):
-        nn.init.normal_(module.weight, std=INIT_STD)
 
 
 def yarn_rescale(freqs: Tensor, base: float, original_seq_len: int, factor: float) -> Tensor:
@@ -121,13 +117,24 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
     return mix  # [..., S, S]
 
 
+def rms_norm(x: Tensor, eps: float = NORM_EPS) -> Tensor:  # [..., dim]
+    x32 = x.float()  # [..., dim]
+    mean_square = x32.square().mean(dim=-1, keepdim=True)  # [..., 1]
+    normed = x32 * torch.rsqrt(mean_square + eps)  # [..., dim]
+    return normed.to(x.dtype)  # [..., dim]
+
+
 class Linear(nn.Module):
-    def __init__(self, in_features: int, out_features: int) -> None:
+    def __init__(self, in_features: int, out_features: int, float32: bool = False) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty(out_features, in_features))  # [out, in]
+        self.float32 = float32
 
     def forward(self, x: Tensor) -> Tensor:  # [..., in]
-        return F.linear(x, self.weight)  # [..., out]
+        if not self.float32:
+            return F.linear(x, self.weight)  # [..., out]
+        with torch.autocast(x.device.type, enabled=False):
+            return F.linear(x.float(), self.weight.float())  # [..., out]
 
 
 class Embedding(nn.Module):
@@ -146,11 +153,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x: Tensor) -> Tensor:  # [..., dim]
-        x32 = x.float()  # [..., dim]
-        mean_square = x32.square().mean(dim=-1, keepdim=True)  # [..., 1]
-        normed = x32 * torch.rsqrt(mean_square + self.eps)  # [..., dim]
-        normed = normed.to(x.dtype)  # [..., dim]
-        return normed * self.weight  # [..., dim]
+        return rms_norm(x, self.eps) * self.weight  # [..., dim]
 
 
 class FeedForward(nn.Module):
@@ -248,12 +251,11 @@ class Gate(nn.Module):
         self.num_experts_per_tok = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
 
-        self.weight = nn.Parameter(torch.empty(self.n_routed_experts, config.hidden_size))  # [E, D]
+        self.score_proj = Linear(config.hidden_size, self.n_routed_experts, float32=True)
         self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
-        with torch.autocast(x.device.type, enabled=False):
-            scores = F.linear(x.float(), self.weight.float())  # [N, E]
+        scores = self.score_proj(x)  # [N, E]
         scores = F.softplus(scores).sqrt()  # [N, E]
 
         biased = scores + self.bias  # [N, E]
@@ -295,42 +297,34 @@ class MixtureOfExperts(nn.Module):
         return out.unflatten(0, (x.size(0), x.size(1)))  # [B, T, D]
 
 
-HC_MULT = 4
-
-
-class MHC(nn.Module):
-    def __init__(self, dim: int):
+class HyperConnection(nn.Module):
+    def __init__(self, dim: int) -> None:
         super().__init__()
+        num_mixes = (2 + HC_MULT) * HC_MULT  # (2+S)*S
+        self.mix_proj = Linear(HC_MULT * dim, num_mixes, float32=True)
+        self.bias = nn.Parameter(torch.zeros(num_mixes, dtype=torch.float32))  # [(2+S)*S]
+        self.scale = nn.Parameter(torch.full((3,), HC_SCALE_INIT, dtype=torch.float32))  # [3]
 
-        self.norm = RMSNorm(HC_MULT * dim)
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:  # [B, T, S, D]
+        x = x.flatten(-2)  # [B, T, S*D]
+        x = x.float()  # [B, T, S*D]
+        x = rms_norm(x)  # [B, T, S*D]
+        mixes = self.mix_proj(x)  # [B, T, (2+S)*S]
 
-        self.a1 = nn.Parameter(torch.full([], 0.01))
-        self.a2 = nn.Parameter(torch.full([], 0.01))
-        self.a3 = nn.Parameter(torch.full([], 0.01))
+        sizes = [HC_MULT, HC_MULT, HC_MULT * HC_MULT]
+        pre, post, comb = mixes.split(sizes, dim=-1)  # [B, T, S], [B, T, S], [B, T, S*S]
+        pre_bias, post_bias, comb_bias = self.bias.split(sizes)  # [S], [S], [S*S]
 
-        self.b1 = nn.Parameter(torch.zeros(HC_MULT))
-        self.b2 = nn.Parameter(torch.zeros(HC_MULT))
-        self.b3 = nn.Parameter(torch.zeros(HC_MULT * HC_MULT))
+        pre = pre * self.scale[0] + pre_bias  # [B, T, S]
+        pre = pre.sigmoid()  # [B, T, S]
+        pre = pre + HC_EPS  # [B, T, S]
 
-        self.w = Linear(HC_MULT * dim, (2 + HC_MULT) * HC_MULT)
+        post = post * self.scale[1] + post_bias  # [B, T, S]
+        post = 2 * post.sigmoid()  # [B, T, S]
 
-    def forward(self, x: Tensor):
-        x = x.flatten(-2)
-        x = self.norm(x)
-
-        r = self.w(x)
-        r_pre = r[..., :HC_MULT]
-        r_post = r[..., HC_MULT : 2 * HC_MULT]
-        r_comb = r[..., 2 * HC_MULT :]
-
-        pre = self.a1 * r_pre + self.b1  # [1, N]
-        pre = torch.sigmoid(pre)
-        post = self.a2 * r_post + self.b2  # [N, 1]
-        post = 2 * torch.sigmoid(post)
-        comb = self.a3 * r_comb + self.b3  # [N, N]
-        comb = comb.unflatten(-1, (HC_MULT, HC_MULT))
-        comb = sinkhorn(comb)
-
+        comb = comb * self.scale[2] + comb_bias  # [B, T, S*S]
+        comb = comb.unflatten(-1, (HC_MULT, HC_MULT))  # [B, T, S, S]
+        comb = sinkhorn(comb)  # [B, T, S, S]
         return pre, post, comb
 
 
