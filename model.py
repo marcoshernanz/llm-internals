@@ -343,10 +343,6 @@ class MHC(nn.Module):
         x = x.flatten(-2)
         x = self.norm(x)
 
-        p = x[..., : self.n]
-        a = x[..., self.n : 2 * self.n]
-        b = x[..., 2 * self.n :]
-
         h_pre = self.a1 * self.s1(x) + self.b1  # [1, N]
         h_pre = torch.sigmoid(h_pre)
         h_post = self.a2 * self.s2(x) + self.b2  # [N, 1]
