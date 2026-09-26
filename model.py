@@ -389,5 +389,8 @@ class Transformer(nn.Module):
 
         for block in self.blocks:
             x = block(x)  # [B, T, D]
+
+        x = hc_pre(x, pre)
+
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
