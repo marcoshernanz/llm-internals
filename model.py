@@ -350,4 +350,4 @@ class MHC(nn.Module):
         h_res = self.a3 * self.s3(x) + self.b3  # [N, N]
         h_res = sinkhorn(h_res)
 
-        return h_res @ x + h_post.mT * layer(h_pre @ x)
+        return h_pre, h_post, h_res
