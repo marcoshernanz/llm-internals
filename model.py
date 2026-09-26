@@ -336,3 +336,7 @@ class MHC:
         p = x[..., : self.n]
         a = x[..., self.n : 2 * self.n]
         b = x[..., 2 * self.n :]
+
+        h_pre  # [1, N]
+        h_post  # [N, 1]
+        h_res  # [N, N]
