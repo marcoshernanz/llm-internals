@@ -359,4 +359,5 @@ class Transformer(nn.Module):
 
 
 def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
+    x.float()
     return torch.einsum("btdf,bts->btd", x, pre)
