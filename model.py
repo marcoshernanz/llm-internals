@@ -106,6 +106,12 @@ def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tens
     return causal & inside_window  # [T, T]
 
 
+def einsum32(equation: str, *operands: Tensor) -> Tensor:
+    operands32 = [operand.float() for operand in operands]
+    with torch.autocast(operands32[0].device.type, enabled=False):
+        return torch.einsum(equation, *operands32)
+
+
 def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
     mix = logits.float()  # [..., S, S]
     mix = mix.softmax(dim=-1)
@@ -118,8 +124,7 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
 
 
 def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, S, D], [B, T, S]
-    weighted = x * pre[..., None]  # [B, T, S, D]
-    read = weighted.sum(dim=-2)  # [B, T, D]
+    read = einsum32("btsd,bts->btd", x, pre)  # [B, T, D]
     return read.to(x.dtype)  # [B, T, D]
 
 
@@ -129,9 +134,8 @@ def hc_post(
     post: Tensor,  # [B, T, S]
     comb: Tensor,  # [B, T, S, S]
 ) -> Tensor:
-    written = out[..., None, :] * post[..., None]  # [B, T, S, D]
-    mixed = residual[..., None, :] * comb[..., None]  # [B, T, S, S, D]
-    mixed = mixed.sum(dim=-3)  # [B, T, S, D]
+    written = einsum32("btd,bts->btsd", out, post)  # [B, T, S, D]
+    mixed = einsum32("btjd,btjk->btkd", residual, comb)  # [B, T, S, D]
     streams = written + mixed  # [B, T, S, D]
     return streams.to(out.dtype)  # [B, T, S, D]
 
