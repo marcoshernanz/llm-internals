@@ -33,8 +33,10 @@ COMPRESS_ROPE_THETA = 160000.0
 ROPE_BETA_FAST = 32
 ROPE_BETA_SLOW = 1
 SLIDING_WINDOW = 128
+HC_MULT = 4
 HC_SINKHORN_ITERS = 20
 HC_EPS = 1e-6
+HC_SCALE_INIT = 0.01
 
 
 def init_weights(module: nn.Module) -> None:
@@ -44,6 +46,8 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.attn_sink, std=INIT_STD)
         nn.init.normal_(module.o_group_weight, std=INIT_STD)
     if isinstance(module, Gate):
+        nn.init.normal_(module.weight, std=INIT_STD)
+    if isinstance(module, HyperConnection):
         nn.init.normal_(module.weight, std=INIT_STD)
 
 
@@ -248,7 +252,8 @@ class Gate(nn.Module):
         self.bias = nn.Buffer(torch.zeros(self.n_routed_experts, dtype=torch.float32))  # [E]
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
-        scores = F.linear(x.float(), self.weight.float())  # [N, E]
+        with torch.autocast(x.device.type, enabled=False):
+            scores = F.linear(x.float(), self.weight.float())  # [N, E]
         scores = F.softplus(scores).sqrt()  # [N, E]
 
         biased = scores + self.bias  # [N, E]
@@ -290,36 +295,6 @@ class MixtureOfExperts(nn.Module):
         return out.unflatten(0, (x.size(0), x.size(1)))  # [B, T, D]
 
 
-class Block(nn.Module):
-    def __init__(self, config: Config) -> None:
-        super().__init__()
-        self.attn_norm = RMSNorm(config.hidden_size)
-        self.attn = Attention(config)
-        self.ffn_norm = RMSNorm(config.hidden_size)
-        self.ffn = MixtureOfExperts(config)
-
-    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
-        x = x + self.attn(self.attn_norm(x))  # [B, T, D]
-        x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
-        return x
-
-
-class Transformer(nn.Module):
-    def __init__(self, config: Config) -> None:
-        super().__init__()
-        self.embed = Embedding(config.vocab_size, config.hidden_size)
-        self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
-        self.out_norm = RMSNorm(config.hidden_size)
-        self.head = Linear(config.hidden_size, config.vocab_size)
-
-    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
-        x = self.embed(ids)  # [B, T, D]
-        for block in self.blocks:
-            x = block(x)  # [B, T, D]
-        x = self.out_norm(x)  # [B, T, D]
-        return self.head(x)  # [B, T, vocab]
-
-
 HC_MULT = 4
 
 
@@ -357,3 +332,33 @@ class MHC(nn.Module):
         comb = sinkhorn(comb)
 
         return pre, post, comb
+
+
+class Block(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.attn_norm = RMSNorm(config.hidden_size)
+        self.attn = Attention(config)
+        self.ffn_norm = RMSNorm(config.hidden_size)
+        self.ffn = MixtureOfExperts(config)
+
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        x = x + self.attn(self.attn_norm(x))  # [B, T, D]
+        x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
+        return x
+
+
+class Transformer(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.embed = Embedding(config.vocab_size, config.hidden_size)
+        self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
+        self.out_norm = RMSNorm(config.hidden_size)
+        self.head = Linear(config.hidden_size, config.vocab_size)
+
+    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
+        x = self.embed(ids)  # [B, T, D]
+        for block in self.blocks:
+            x = block(x)  # [B, T, D]
+        x = self.out_norm(x)  # [B, T, D]
+        return self.head(x)  # [B, T, vocab]
