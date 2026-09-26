@@ -363,8 +363,9 @@ class Block(nn.Module):
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
         residual = x
         attn_pre, attn_post, attn_comb = self.attn_hc(x)
+        x = hc_pre(x, attn_pre)
 
-        x = x + self.attn(self.attn_norm(hc_pre(x, attn_pre)))  # [B, T, D]
+        x = x + self.attn(self.attn_norm(x))  # [B, T, D]
         x = x + self.ffn(self.ffn_norm(x))  # [B, T, D]
         return x
 
