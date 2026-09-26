@@ -321,11 +321,11 @@ class Transformer(nn.Module):
 
 
 class MHC(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, dim: int):
         super().__init__()
         self.n = config.n
 
-        self.norm = RMSNorm(self.n * config.hidden_size)
+        self.norm = RMSNorm(self.n * dim)
 
         self.a1 = nn.Parameter(torch.empty(1))
         self.a2 = nn.Parameter(torch.empty(1))
@@ -335,9 +335,9 @@ class MHC(nn.Module):
         self.b2 = nn.Parameter(torch.empty(self.n))
         self.b3 = nn.Parameter(torch.empty(self.n * self.n))
 
-        self.s1 = Linear(self.n * config.hidden_size, self.n)
-        self.s2 = Linear(self.n * config.hidden_size, self.n)
-        self.s3 = Linear(self.n * config.hidden_size, self.n * self.n)
+        self.s1 = Linear(self.n * dim, self.n)
+        self.s2 = Linear(self.n * dim, self.n)
+        self.s3 = Linear(self.n * dim, self.n * self.n)
 
     def forward(self, x: Tensor):
         x = x.flatten(-2)
