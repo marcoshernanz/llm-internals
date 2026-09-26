@@ -342,12 +342,11 @@ class MHC:
     def forward(self, x: Tensor):
         x = x.flatten(-2)
         x = self.norm(x)
-        x = self.proj(x)
 
         p = x[..., : self.n]
         a = x[..., self.n : 2 * self.n]
         b = x[..., 2 * self.n :]
 
-        h_pre  # [1, N]
-        h_post  # [N, 1]
-        h_res  # [N, N]
+        h_pre = self.a1 * self.s1(x) + self.b1  # [1, N]
+        h_post = self.a2 * self.s2(x) + self.b2  # [N, 1]
+        h_res = self.a3 * self.s3(x) + self.b3  # [N, N]
