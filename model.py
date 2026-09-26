@@ -321,8 +321,10 @@ class Transformer(nn.Module):
 
 
 class MHC:
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
+        self.n = config.n
+        self.proj = Linear(config.hidden_size * self.n, (2 * self.n) * self.n)
 
     def forward(self, x: Tensor):
         pass
