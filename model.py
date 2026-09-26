@@ -358,6 +358,7 @@ class Block(nn.Module):
         self.attn_hc = HyperConnection(config.hidden_size)
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
+        self.ffn_hc = HyperConnection(config.hidden_size)
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
         x = x + self.attn(self.attn_norm(x))  # [B, T, D]
