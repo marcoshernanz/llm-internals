@@ -118,14 +118,22 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
 
 
 def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, S, D], [B, T, S]
-    x.float()
-    return torch.einsum("btsd,bts->btd", x, pre)
+    weighted = x * pre[..., None]  # [B, T, S, D]
+    read = weighted.sum(dim=-2)  # [B, T, D]
+    return read.to(x.dtype)  # [B, T, D]
 
 
-def hc_post(out: Tensor, residual: Tensor, post: Tensor, comb: Tensor) -> Tensor:
-    out = torch.einsum("btd,bts->btsd", out, post)
-    residual = torch.einsum("btsd,btsk->btkd", residual, comb)
-    return out + residual
+def hc_post(
+    out: Tensor,  # [B, T, D]
+    residual: Tensor,  # [B, T, S, D]
+    post: Tensor,  # [B, T, S]
+    comb: Tensor,  # [B, T, S, S]
+) -> Tensor:
+    written = out[..., None, :] * post[..., None]  # [B, T, S, D]
+    mixed = residual[..., None, :] * comb[..., None]  # [B, T, S, S, D]
+    mixed = mixed.sum(dim=-3)  # [B, T, S, D]
+    streams = written + mixed  # [B, T, S, D]
+    return streams.to(out.dtype)  # [B, T, S, D]
 
 
 def rms_norm(x: Tensor, eps: float = NORM_EPS) -> Tensor:  # [..., dim]
