@@ -339,7 +339,7 @@ class MHC:
         self.s2 = Linear(self.n * config.hidden_size, self.n)
         self.s3 = Linear(self.n * config.hidden_size, self.n * self.n)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, layer: Layer):
         x = x.flatten(-2)
         x = self.norm(x)
 
@@ -353,3 +353,5 @@ class MHC:
         h_post = 2 * torch.sigmoid(h_post)
         h_res = self.a3 * self.s3(x) + self.b3  # [N, N]
         h_res = sinkhorn(h_res)
+
+        return h_res @ x + h_post.mT * layer(h_pre @ x)
