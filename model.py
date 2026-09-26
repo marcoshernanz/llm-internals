@@ -358,5 +358,5 @@ class Transformer(nn.Module):
         return self.head(x)  # [B, T, vocab]
 
 
-def hc_pre(x: Tensor, pre: Tensor) -> Tensor:
-    pass
+def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, D, S], [B, T, S]
+    return torch.einsum("btdf,bts->btd", x, pre)
