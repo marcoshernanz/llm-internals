@@ -474,5 +474,8 @@ class Indexer(nn.Module):
         self.k_proj = Linear(config.head_dim, config.index_head_dim)
         self.k_norm = RMSNorm(config.index_head_dim)
 
+    def keys(self, latents: Tensor, latent_freqs: Tensor):
+        pass
+
     def forward(self, x: Tensor):
         pass
