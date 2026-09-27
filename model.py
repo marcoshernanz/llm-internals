@@ -461,3 +461,11 @@ class Transformer(nn.Module):
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
+
+
+class Indexer(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
