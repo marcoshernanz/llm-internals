@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
+    sliding_window: int
+    compress_ratios: tuple[int, ...]
+
     hidden_size: int  # D
     vocab_size: int  # rows of the embedding and of the head
     num_hidden_layers: int  # blocks in the stack
