@@ -486,5 +486,7 @@ class Indexer(nn.Module):
     def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
         q = self.q_up_proj(qr)  # [B, T, Hi*Di]
         q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))
+        q = apply_partial_rope(q, freqs_cis)
+
         k = self.keys(keys, freqs_cis)  # [B, T, Di]
         w = self.weights_proj(x)  # [B, T, Hi]
