@@ -466,6 +466,7 @@ class Transformer(nn.Module):
 class Indexer(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
+
         self.q_up_proj = Linear(
             config.num_attention_heads * config.head_dim,
             config.index_n_heads * config.index_head_dim,
@@ -482,5 +483,6 @@ class Indexer(nn.Module):
 
     def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
         q = self.q_up_proj(qr)  # [B, T, Hi*Di]
+        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))
         k = self.keys(keys, freqs_cis)  # [B, T, Di]
         w = self.weights_proj(x)  # [B, T, Hi]
