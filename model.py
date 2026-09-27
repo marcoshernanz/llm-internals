@@ -481,3 +481,4 @@ class Indexer(nn.Module):
 
     def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
         q = self.q_up_proj(qr)
+        keys = self.keys(keys, freqs_cis)
