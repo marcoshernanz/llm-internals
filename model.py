@@ -234,6 +234,38 @@ class Compressor(nn.Module):
         return self.norm(pooled)  # [B, C, Dh]
 
 
+class Indexer(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.index_n_heads = config.index_n_heads
+        self.index_head_dim = config.index_head_dim
+
+        self.q_up_proj = Linear(
+            config.num_attention_heads * config.head_dim,
+            self.index_n_heads * self.index_head_dim,
+        )
+        self.weights_proj = Linear(config.hidden_size, self.index_n_heads)
+        self.k_proj = Linear(config.head_dim, self.index_head_dim)
+        self.k_norm = RMSNorm(self.index_head_dim)
+
+    def keys(self, latents: Tensor, latent_freqs: Tensor):
+        k = self.k_proj(latents)
+        k = self.k_norm(k)
+        k = apply_partial_rope(k, latent_freqs)
+        return k
+
+    def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
+        q = self.q_up_proj(qr)  # [B, C, Hi*Di]
+        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))  # [B, C, Hi, Di]
+        q = apply_partial_rope(q, freqs_cis)
+
+        k = self.keys(keys, freqs_cis)  # [B, C, Di]
+        w = self.weights_proj(x)  # [B, C, Hi]
+
+        x = einsum32("bthd,bcd->bthc", q, k)
+        x = einsum32("bch,bthd->btd", w, x)
+
+
 class Attention(nn.Module):
     def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
@@ -461,35 +493,3 @@ class Transformer(nn.Module):
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
-
-
-class Indexer(nn.Module):
-    def __init__(self, config: Config):
-        super().__init__()
-        self.index_n_heads = config.index_n_heads
-        self.index_head_dim = config.index_head_dim
-
-        self.q_up_proj = Linear(
-            config.num_attention_heads * config.head_dim,
-            self.index_n_heads * self.index_head_dim,
-        )
-        self.weights_proj = Linear(config.hidden_size, self.index_n_heads)
-        self.k_proj = Linear(config.head_dim, self.index_head_dim)
-        self.k_norm = RMSNorm(self.index_head_dim)
-
-    def keys(self, latents: Tensor, latent_freqs: Tensor):
-        k = self.k_proj(latents)
-        k = self.k_norm(k)
-        k = apply_partial_rope(k, latent_freqs)
-        return k
-
-    def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
-        q = self.q_up_proj(qr)  # [B, C, Hi*Di]
-        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))  # [B, C, Hi, Di]
-        q = apply_partial_rope(q, freqs_cis)
-
-        k = self.keys(keys, freqs_cis)  # [B, C, Di]
-        w = self.weights_proj(x)  # [B, C, Hi]
-
-        x = einsum32("bthd,bcd->bthc", q, k)
-        x = einsum32("bch,bthd->btd", w, x)
