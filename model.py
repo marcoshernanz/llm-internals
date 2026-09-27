@@ -477,7 +477,8 @@ class Indexer(nn.Module):
     def keys(self, latents: Tensor, latent_freqs: Tensor):
         k = self.k_proj(latents)
         k = self.k_norm(k)
-        apply_partial_rope(k, latent_freqs)
+        k = apply_partial_rope(k, latent_freqs)
+        return k
 
     def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
         q = self.q_up_proj(qr)
