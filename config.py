@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
+    index_n_heads: int
+    index_head_dim: int
+    index_topk: int
     hidden_size: int  # D
     vocab_size: int  # rows of the embedding and of the head
     num_hidden_layers: int  # blocks in the stack
