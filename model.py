@@ -481,6 +481,6 @@ class Indexer(nn.Module):
         return k
 
     def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
-        q = self.q_up_proj(qr)
-        k = self.keys(keys, freqs_cis)
-        w = self.weights_proj(x)
+        q = self.q_up_proj(qr)  # [B, T, Hi*Di]
+        k = self.keys(keys, freqs_cis)  # [B, T, Di]
+        w = self.weights_proj(x)  # [B, T, Hi]
