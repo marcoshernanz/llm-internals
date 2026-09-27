@@ -411,3 +411,5 @@ class Compressor(nn.Module):
 
         v = self.v_proj(x)  # [B, T, D]
         v = v.view(b, t // m, m, d)  # [B, T/M, M, D]
+
+        u = einsum("bcmd,bcmd->bcd", g, v)
