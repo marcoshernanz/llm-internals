@@ -17,6 +17,9 @@ Shape letters used in the comments:
     S   residual streams (hc_mult)
     m   tokens pooled into one compressed entry (the layer's compression ratio)
     C   compressed entries, T // m (0 in sliding-window-only layers)
+    Hi  heads of the indexer (index_n_heads)
+    Di  width of one indexer head (index_head_dim)
+    k   compressed entries each query selects (index_topk)
 """
 
 import math
@@ -81,9 +84,9 @@ def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  
     if inverse:
         freqs_cis = freqs_cis.conj()  # the conjugate rotates by minus the angle
     if x.ndim == 3:
-        freqs_cis = freqs_cis.view(1, x.size(1), -1)  # [1, T, Dr/2]
+        freqs_cis = freqs_cis.view(1, x.size(1), pairs.size(-1))  # [1, T, Dr/2]
     else:
-        freqs_cis = freqs_cis.view(1, x.size(1), 1, -1)  # [1, T, 1, Dr/2]
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, pairs.size(-1))  # [1, T, 1, Dr/2]
 
     rotated = pairs * freqs_cis  # [B, T, H, Dr/2] complex
     rotated = torch.view_as_real(rotated)  # [B, T, H, Dr/2, 2]
@@ -114,11 +117,13 @@ def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     return entries[None, :] < complete[:, None]  # [T, C]
 
 
-def select_topk(scores: Tensor, visible: Tensor, k: int):
-    c = scores.size(-1)
-    k = min(k, c)
-    scores = scores.masked_fill(~visible, -torch.inf)
-    return scores.topk(k, dim=-1)
+def select_topk(scores: Tensor, visible: Tensor, k: int) -> Tensor:  # [B, T, C], [T, C]
+    k = min(k, scores.size(-1))
+    scores = scores.masked_fill(~visible, -torch.inf)  # [B, T, C]
+    top = scores.topk(k, dim=-1)  # [B, T, k], [B, T, k]
+    reachable = top.values > -torch.inf  # [B, T, k]
+    selected = torch.zeros_like(scores, dtype=torch.bool)  # [B, T, C]
+    return selected.scatter(-1, top.indices, reachable)  # [B, T, C]
 
 
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
@@ -244,14 +249,14 @@ class Compressor(nn.Module):
 class Indexer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.index_n_heads = config.index_n_heads
-        self.index_head_dim = config.index_head_dim
-        self.weights_scale = (self.index_n_heads * self.index_head_dim) ** -0.5
+        self.num_heads = config.index_n_heads
+        self.head_dim = config.index_head_dim
+        self.weights_scale = (self.num_heads * self.head_dim) ** -0.5
 
-        self.q_up_proj = Linear(config.q_lora_rank, self.index_n_heads * self.index_head_dim)
-        self.weights_proj = Linear(config.hidden_size, self.index_n_heads)
-        self.k_proj = Linear(config.head_dim, self.index_head_dim)
-        self.k_norm = RMSNorm(self.index_head_dim)
+        self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
+        self.weights_proj = Linear(config.hidden_size, self.num_heads)
+        self.k_proj = Linear(config.head_dim, self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
 
     def keys(self, latents: Tensor, latent_freqs: Tensor) -> Tensor:  # [B, C, Dh], [C, Dr/2]
         k = self.k_proj(latents)  # [B, C, Di]
@@ -262,17 +267,17 @@ class Indexer(nn.Module):
         self,
         x: Tensor,  # [B, T, D]
         qr: Tensor,  # [B, T, Dq]
-        keys: Tensor,  # [B, C, Di]
+        k: Tensor,  # [B, C, Di]
         freqs_cis: Tensor,  # [T, Dr/2]
     ) -> Tensor:
         q = self.q_up_proj(qr)  # [B, T, Hi*Di]
-        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))  # [B, T, Hi, Di]
+        q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, Hi, Di]
         q = apply_partial_rope(q, freqs_cis)  # [B, T, Hi, Di]
 
         weights = self.weights_proj(x)  # [B, T, Hi]
         weights = weights * self.weights_scale  # [B, T, Hi]
 
-        scores = einsum32("bthd,bcd->bthc", q, keys)  # [B, T, Hi, C]
+        scores = einsum32("bthd,bcd->bthc", q, k)  # [B, T, Hi, C]
         scores = scores.relu()  # [B, T, Hi, C]
         return einsum32("bthc,bth->btc", scores, weights)  # [B, T, C]
 
@@ -287,6 +292,7 @@ class Attention(nn.Module):
         self.o_lora_rank = config.o_lora_rank
         self.sliding_window = config.sliding_window
         self.compress_ratio = config.compress_ratios[layer_id]
+        self.index_topk = config.index_topk
 
         self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
         self.q_norm = RMSNorm(config.q_lora_rank)
@@ -301,10 +307,12 @@ class Attention(nn.Module):
 
         if self.compress_ratio:
             self.compressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
+            self.indexer = Indexer(config)
             rope_theta = COMPRESS_ROPE_THETA
             original_seq_len = config.original_max_position_embeddings
         else:
             self.compressor = None
+            self.indexer = None
             rope_theta = ROPE_THETA
             original_seq_len = 0
 
@@ -317,26 +325,28 @@ class Attention(nn.Module):
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
-    def queries_and_kv(self, x: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
-        q = self.q_down_proj(x)  # [B, T, Dq]
-        q = self.q_norm(q)  # [B, T, Dq]
-        q = self.q_up_proj(q)  # [B, T, H*Dh]
+    def queries(self, x: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
+        qr = self.q_down_proj(x)  # [B, T, Dq]
+        qr = self.q_norm(qr)  # [B, T, Dq]
+        q = self.q_up_proj(qr)  # [B, T, H*Dh]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
         q = apply_partial_rope(q, freqs_cis)  # [B, T, H, Dh]
+        return qr, q
 
+    def window_kv(self, x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, D]
         kv = self.kv_proj(x)  # [B, T, Dh]
         kv = self.kv_norm(kv)  # [B, T, Dh]
-        kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
-        return q, kv
+        return apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
 
     def attend(
         self,
         q: Tensor,  # [B, T, H, Dh]
         kv: Tensor,  # [B, T+C, Dh]
-        visible: Tensor,  # [T, T+C]
+        visible: Tensor,  # [B, T, T+C]
     ) -> Tensor:
         scores = einsum32("bthd,bsd->bhts", q, kv)  # [B, H, T, T+C]
         scores = scores * self.softmax_scale  # [B, H, T, T+C]
+        visible = visible.unsqueeze(1)  # [B, 1, T, T+C]
         scores = scores.masked_fill(~visible, -torch.inf)  # [B, H, T, T+C]
 
         sink = self.attn_sink.view(1, -1, 1, 1)  # [1, H, 1, 1]
@@ -359,16 +369,23 @@ class Attention(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
+        qr, q = self.queries(x, freqs_cis)  # [B, T, Dq], [B, T, H, Dh]
+        kv = self.window_kv(x, freqs_cis)  # [B, T, Dh]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
-        q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
+        visible = visible.expand(x.size(0), -1, -1)  # [B, T, T]
 
-        if self.compressor is not None:
+        if self.compressor is not None and self.indexer is not None:
             latents = self.compressor(x)  # [B, C, Dh]
             latent_freqs = freqs_cis[: latents.size(1) : self.compress_ratio]  # [C, Dr/2]
-            latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
+
+            index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
+            index_scores = self.indexer(x, qr, index_keys, freqs_cis)  # [B, T, C]
             latent_visible = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
+            selected = select_topk(index_scores, latent_visible, self.index_topk)  # [B, T, C]
+
+            latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
             kv = torch.cat([kv, latents], dim=1)  # [B, T+C, Dh]
-            visible = torch.cat([visible, latent_visible], dim=-1)  # [T, T+C]
+            visible = torch.cat([visible, selected], dim=-1)  # [B, T, T+C]
 
         o = self.attend(q, kv, visible)  # [B, T, H, Dh]
         return self.project_out(o, freqs_cis)  # [B, T, D]
