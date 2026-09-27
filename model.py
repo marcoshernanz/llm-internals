@@ -402,4 +402,4 @@ class Compressor(nn.Module):
         self.gate_proj = Linear(config.hidden_size, config.hidden_size)
 
     def forward(self, x: Tensor):  # [B, T, D]
-        pass
+        g = self.gate_proj(x)
