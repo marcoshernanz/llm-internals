@@ -99,7 +99,7 @@ def apply_partial_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> T
     return torch.cat([content, rotary], dim=-1)  # [..., Dh]
 
 
-def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tensor:
+def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     positions = torch.arange(seq_len, device=device)  # [T]
     distance = positions[:, None] - positions[None, :]  # [T, T]
     causal = distance >= 0  # [T, T]
