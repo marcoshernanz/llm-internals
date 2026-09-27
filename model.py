@@ -466,6 +466,13 @@ class Transformer(nn.Module):
 class Indexer(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
+        self.q_up_proj = Linear(
+            config.num_attention_heads * config.head_dim,
+            config.index_n_heads * config.index_head_dim,
+        )
+        self.weights_proj = Linear(config.hidden_size, config.index_n_heads)
+        self.k_proj = Linear()
+        self.k_norm = RMSNorm()
 
     def forward(self, x: Tensor):
         pass
