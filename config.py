@@ -5,9 +5,6 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    index_n_heads: int
-    index_head_dim: int
-    index_topk: int
     hidden_size: int  # D
     vocab_size: int  # rows of the embedding and of the head
     num_hidden_layers: int  # blocks in the stack
@@ -24,6 +21,9 @@ class Config:
     o_groups: int  # groups of heads in the output projection
     sliding_window: int  # recent tokens every layer attends to
     compress_ratios: tuple[int, ...]  # m per layer, 0 for sliding window only
+    index_n_heads: int  # Hi, heads of the indexer
+    index_head_dim: int  # Di, width of one indexer head
+    index_topk: int  # k, compressed entries each query selects
     max_position_embeddings: int  # rows in the RoPE table
     original_max_position_embeddings: int  # training length before the YaRN extension
     rope_factor: float  # YaRN extension factor
@@ -46,6 +46,9 @@ V41_FLASH_CONFIG = Config(
     o_groups=8,
     sliding_window=128,
     compress_ratios=(0, 0) + (2,) * 18 + (1,) * 20 + (0, 0, 0),  # last three: DSpark layers
+    index_n_heads=32,
+    index_head_dim=128,
+    index_topk=512,
     max_position_embeddings=1_048_576,
     original_max_position_embeddings=65_536,
     rope_factor=16.0,
@@ -68,6 +71,9 @@ TINY_CONFIG = Config(
     o_groups=2,
     sliding_window=8,
     compress_ratios=(0, 2),
+    index_n_heads=2,
+    index_head_dim=16,
+    index_topk=4,
     max_position_embeddings=256,
     original_max_position_embeddings=16,
     rope_factor=16.0,
