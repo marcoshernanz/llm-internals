@@ -479,5 +479,5 @@ class Indexer(nn.Module):
         k = self.k_norm(k)
         apply_partial_rope(k, latent_freqs)
 
-    def forward(self, x: Tensor):
+    def forward(x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
         pass
