@@ -126,6 +126,27 @@ def select_topk(scores: Tensor, visible: Tensor, k: int) -> Tensor:  # [B, T, C]
     return selected.scatter(-1, top.indices, reachable)  # [B, T, C]
 
 
+def indexer_kl(
+    scores: Tensor,  # [B, T, C]
+    attention: Tensor,  # [B, T, C]
+    selected: Tensor,  # [B, T, C]
+) -> Tensor:
+    rows = selected.any(dim=-1)  # [B, T]
+    scores = scores[rows]  # [N, C]
+    attention = attention[rows]  # [N, C]
+    selected = selected[rows]  # [N, C]
+
+    target = attention.detach()  # [N, C]
+    target = target / (target.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, C]
+
+    scores = scores.masked_fill(~selected, -torch.inf)  # [N, C]
+    log_probs = scores.log_softmax(dim=-1)  # [N, C]
+    log_probs = log_probs.masked_fill(~selected, 0.0)  # [N, C]
+
+    kl = torch.xlogy(target, target) - target * log_probs  # [N, C]
+    return kl.sum() / rows.numel()
+
+
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
     operands32 = [operand.float() for operand in operands]
     with torch.autocast(operands32[0].device.type, enabled=False):
@@ -259,6 +280,7 @@ class Indexer(nn.Module):
         self.k_norm = RMSNorm(self.head_dim)
 
     def keys(self, latents: Tensor, latent_freqs: Tensor) -> Tensor:  # [B, C, Dh], [C, Dr/2]
+        latents = latents.detach()  # [B, C, Dh]
         k = self.k_proj(latents)  # [B, C, Di]
         k = self.k_norm(k)  # [B, C, Di]
         return apply_partial_rope(k, latent_freqs)  # [B, C, Di]
@@ -270,6 +292,9 @@ class Indexer(nn.Module):
         k: Tensor,  # [B, C, Di]
         freqs_cis: Tensor,  # [T, Dr/2]
     ) -> Tensor:
+        x = x.detach()  # [B, T, D]
+        qr = qr.detach()  # [B, T, Dq]
+
         q = self.q_up_proj(qr)  # [B, T, Hi*Di]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, Hi, Di]
         q = apply_partial_rope(q, freqs_cis)  # [B, T, Hi, Di]
@@ -343,7 +368,7 @@ class Attention(nn.Module):
         q: Tensor,  # [B, T, H, Dh]
         kv: Tensor,  # [B, T+C, Dh]
         visible: Tensor,  # [B, T, T+C]
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         scores = einsum32("bthd,bsd->bhts", q, kv)  # [B, H, T, T+C]
         scores = scores * self.softmax_scale  # [B, H, T, T+C]
         visible = visible.unsqueeze(1)  # [B, 1, T, T+C]
@@ -353,10 +378,11 @@ class Attention(nn.Module):
         sink = sink.expand(scores.size(0), -1, scores.size(2), -1)  # [B, H, T, 1]
         scores = torch.cat([scores, sink], dim=-1)  # [B, H, T, T+C+1]
 
-        weights = scores.softmax(dim=-1)  # [B, H, T, T+C+1]
-        weights = weights[..., :-1]  # [B, H, T, T+C]
-        weights = weights.to(kv.dtype)  # [B, H, T, T+C]
-        return torch.einsum("bhts,bsd->bthd", weights, kv)  # [B, T, H, Dh]
+        probs = scores.softmax(dim=-1)  # [B, H, T, T+C+1]
+        probs = probs[..., :-1]  # [B, H, T, T+C]
+        weights = probs.to(kv.dtype)  # [B, H, T, T+C]
+        o = torch.einsum("bhts,bsd->bthd", weights, kv)  # [B, T, H, Dh]
+        return o, probs  # [B, T, H, Dh], [B, H, T, T+C]
 
     def project_out(self, o: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dh]
         o = apply_partial_rope(o, freqs_cis, inverse=True)  # [B, T, H, Dh]
@@ -367,28 +393,35 @@ class Attention(nn.Module):
         o = o.flatten(-2)  # [B, T, G*Do]
         return self.o_proj(o)  # [B, T, D]
 
-    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         qr, q = self.queries(x, freqs_cis)  # [B, T, Dq], [B, T, H, Dh]
         kv = self.window_kv(x, freqs_cis)  # [B, T, Dh]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
         visible = visible.expand(x.size(0), -1, -1)  # [B, T, T]
 
-        if self.compressor is not None and self.indexer is not None:
-            latents = self.compressor(x)  # [B, C, Dh]
-            latent_freqs = freqs_cis[: latents.size(1) : self.compress_ratio]  # [C, Dr/2]
+        if self.compressor is None or self.indexer is None:
+            o, _ = self.attend(q, kv, visible)  # [B, T, H, Dh]
+            no_loss = torch.zeros((), device=x.device)  # scalar
+            return self.project_out(o, freqs_cis), no_loss  # [B, T, D], scalar
 
-            index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
-            index_scores = self.indexer(x, qr, index_keys, freqs_cis)  # [B, T, C]
-            latent_visible = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
-            selected = select_topk(index_scores, latent_visible, self.index_topk)  # [B, T, C]
+        latents = self.compressor(x)  # [B, C, Dh]
+        latent_freqs = freqs_cis[: latents.size(1) : self.compress_ratio]  # [C, Dr/2]
 
-            latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
-            kv = torch.cat([kv, latents], dim=1)  # [B, T+C, Dh]
-            visible = torch.cat([visible, selected], dim=-1)  # [B, T, T+C]
+        index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
+        index_scores = self.indexer(x, qr, index_keys, freqs_cis)  # [B, T, C]
+        latent_visible = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
+        selected = select_topk(index_scores, latent_visible, self.index_topk)  # [B, T, C]
 
-        o = self.attend(q, kv, visible)  # [B, T, H, Dh]
-        return self.project_out(o, freqs_cis)  # [B, T, D]
+        latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
+        kv = torch.cat([kv, latents], dim=1)  # [B, T+C, Dh]
+        visible = torch.cat([visible, selected], dim=-1)  # [B, T, T+C]
+        o, probs = self.attend(q, kv, visible)  # [B, T, H, Dh], [B, H, T, T+C]
+
+        attention = probs[..., x.size(1) :]  # [B, H, T, C]
+        attention = attention.sum(dim=1)  # [B, T, C]
+        indexer_loss = indexer_kl(index_scores, attention, selected)  # scalar
+        return self.project_out(o, freqs_cis), indexer_loss  # [B, T, D], scalar
 
 
 class Gate(nn.Module):
@@ -485,11 +518,15 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
 
-    def forward(self, x: Tensor, pre: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, S, D], [B, T, S]
+    def forward(
+        self,
+        x: Tensor,  # [B, T, S, D]
+        pre: Tensor,  # [B, T, S]
+    ) -> tuple[Tensor, Tensor, Tensor]:
         attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
         h = hc_pre(x, pre)  # [B, T, D]
         h = self.attn_norm(h)  # [B, T, D]
-        h = self.attn(h)  # [B, T, D]
+        h, indexer_loss = self.attn(h)  # [B, T, D], scalar
         x = hc_post(h, x, attn_post, attn_comb)  # [B, T, S, D]
 
         ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
@@ -497,7 +534,7 @@ class Block(nn.Module):
         h = self.ffn_norm(h)  # [B, T, D]
         h = self.ffn(h)  # [B, T, D]
         x = hc_post(h, x, ffn_post, ffn_comb)  # [B, T, S, D]
-        return x, ffn_pre
+        return x, ffn_pre, indexer_loss
 
 
 class Transformer(nn.Module):
@@ -510,14 +547,18 @@ class Transformer(nn.Module):
         self.out_norm = RMSNorm(config.hidden_size)
         self.head = Linear(config.hidden_size, config.vocab_size)
 
-    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
+    def forward(self, ids: Tensor) -> tuple[Tensor, Tensor]:  # [B, T]
         x = self.embed(ids)  # [B, T, D]
         x = x[:, :, None, :]  # [B, T, 1, D]
         x = x.expand(-1, -1, HC_MULT, -1)  # [B, T, S, D]
         pre = torch.zeros(x.shape[:-1], dtype=torch.float32, device=x.device)  # [B, T, S]
         pre[..., 0] = 1.0  # [B, T, S]
+
+        indexer_loss = torch.zeros((), device=x.device)  # scalar
         for block in self.blocks:
-            x, pre = block(x, pre)  # [B, T, S, D], [B, T, S]
+            x, pre, layer_loss = block(x, pre)  # [B, T, S, D], [B, T, S], scalar
+            indexer_loss = indexer_loss + layer_loss  # scalar
+
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
-        return self.head(x)  # [B, T, vocab]
+        return self.head(x), indexer_loss  # [B, T, vocab], scalar
