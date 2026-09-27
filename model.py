@@ -250,7 +250,9 @@ class Attention(nn.Module):
         self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
         freqs_cis = rope_freqs_cis(
-            config.qk_rope_head_dim, config.max_position_embeddings, ROPE_THETA
+            config.qk_rope_head_dim,
+            config.max_position_embeddings,
+            COMPRESS_ROPE_THETA if self.compress_ratio == 0 else ROPE_THETA,
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
