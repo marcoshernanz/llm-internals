@@ -407,3 +407,4 @@ class Compressor(nn.Module):
         g = self.gate_proj(x)  # [B, T, D]
         g = g.view(b, t // m, m, d)  # [B, T/M, M, D]
         g = g.softmax(dim=-2)
+        v = self.v_proj(v)
