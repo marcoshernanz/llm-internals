@@ -115,7 +115,9 @@ def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
 
 
 def select_topk(scores: Tensor, visible: Tensor, k: int):
-    pass
+    c = scores.size(-1)
+    k = min(k, c)
+    scores = scores.masked_fill(~visible, -torch.inf)
 
 
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
