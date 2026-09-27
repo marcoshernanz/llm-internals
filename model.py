@@ -249,6 +249,8 @@ class Attention(nn.Module):
         self.o_group_weight = nn.Parameter(group_weight)  # [G, Do, (H/G)*Dh]
         self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
+        self.compressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
+
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim,
             config.max_position_embeddings,
