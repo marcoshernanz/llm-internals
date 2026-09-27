@@ -118,7 +118,7 @@ def select_topk(scores: Tensor, visible: Tensor, k: int):
     c = scores.size(-1)
     k = min(k, c)
     scores = scores.masked_fill(~visible, -torch.inf)
-    scores.topk(k, dim=-1)
+    return scores.topk(k, dim=-1)
 
 
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
