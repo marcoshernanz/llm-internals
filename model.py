@@ -475,7 +475,9 @@ class Indexer(nn.Module):
         self.k_norm = RMSNorm(config.index_head_dim)
 
     def keys(self, latents: Tensor, latent_freqs: Tensor):
-        pass
+        k = self.k_proj(latents)
+        k = self.k_norm(k)
+        apply_partial_rope(k, latent_freqs)
 
     def forward(self, x: Tensor):
         pass
