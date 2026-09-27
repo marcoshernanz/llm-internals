@@ -291,7 +291,7 @@ class Attention(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
-        visible = sliding_window_mask(x.size(1), SLIDING_WINDOW, x.device)  # [T, T]
+        visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
 
         q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
         o = self.attend(q, kv, visible)  # [B, T, H, Dh]
