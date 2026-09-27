@@ -15,6 +15,8 @@ Shape letters used in the comments:
     N   tokens, batch and time flattened together
     X   tokens routed to one expert, different for each
     S   residual streams (hc_mult)
+    m   tokens pooled into one compressed entry (the layer's compression ratio)
+    C   compressed entries, T // m
 """
 
 import math
@@ -195,6 +197,27 @@ class FeedForward(nn.Module):
             up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
         hidden = F.silu(gate) * up  # [..., F]
         return self.down_proj(hidden.to(x.dtype))  # [..., D]
+
+
+class Compressor(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.gate_proj = Linear(config.hidden_size, config.hidden_size)
+        self.v_proj = Linear(config.hidden_size, config.hidden_size)
+        self.norm = RMSNorm(config.hidden_size)
+
+    def forward(self, x: Tensor):  # [B, T, D]
+        b, t, d = x.size()
+
+        g = self.gate_proj(x)  # [B, T, D]
+        g = g.view(b, t // m, m, d)  # [B, T/M, M, D]
+        g = g.softmax(dim=-2)
+
+        v = self.v_proj(x)  # [B, T, D]
+        v = v.view(b, t // m, m, d)  # [B, T/M, M, D]
+
+        u = torch.einsum("bcmd,bcmd->bcd", g, v)  # [B, T/M, D]
+        return self.norm(u)  # [B, T/M, D]
 
 
 class Attention(nn.Module):
@@ -394,24 +417,3 @@ class Transformer(nn.Module):
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
-
-
-class Compressor(nn.Module):
-    def __init__(self, config: Config):
-        super().__init__()
-        self.gate_proj = Linear(config.hidden_size, config.hidden_size)
-        self.v_proj = Linear(config.hidden_size, config.hidden_size)
-        self.norm = RMSNorm(config.hidden_size)
-
-    def forward(self, x: Tensor):  # [B, T, D]
-        b, t, d = x.size()
-
-        g = self.gate_proj(x)  # [B, T, D]
-        g = g.view(b, t // m, m, d)  # [B, T/M, M, D]
-        g = g.softmax(dim=-2)
-
-        v = self.v_proj(x)  # [B, T, D]
-        v = v.view(b, t // m, m, d)  # [B, T/M, M, D]
-
-        u = torch.einsum("bcmd,bcmd->bcd", g, v)  # [B, T/M, D]
-        return self.norm(u)  # [B, T/M, D]
