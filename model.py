@@ -16,7 +16,7 @@ Shape letters used in the comments:
     X   tokens routed to one expert, different for each
     S   residual streams (hc_mult)
     m   tokens pooled into one compressed entry (the layer's compression ratio)
-    C   compressed entries, T // m
+    C   compressed entries, T // m (0 in sliding-window-only layers)
 """
 
 import math
@@ -109,8 +109,9 @@ def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tens
 
 def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     positions = torch.arange(seq_len, device=device)  # [T]
-    distance = positions[:, None] - positions[None, :]  # [T, T]
-    return distance < (seq_len + 1) // ratio  # [T, T]
+    entries = torch.arange(seq_len // ratio, device=device)  # [C]
+    complete = (positions + 1) // ratio  # [T]
+    return entries[None, :] < complete[:, None]  # [T, C]
 
 
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
@@ -255,15 +256,21 @@ class Attention(nn.Module):
         self.o_group_weight = nn.Parameter(group_weight)  # [G, Do, (H/G)*Dh]
         self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
-        if self.compress_ratio != 0:
-            self.coompressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
+        if self.compress_ratio:
+            self.compressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
+            rope_theta = COMPRESS_ROPE_THETA
+            original_seq_len = config.original_max_position_embeddings
         else:
             self.compressor = None
+            rope_theta = ROPE_THETA
+            original_seq_len = 0
 
         freqs_cis = rope_freqs_cis(
             config.qk_rope_head_dim,
             config.max_position_embeddings,
-            COMPRESS_ROPE_THETA if self.compress_ratio == 0 else ROPE_THETA,
+            rope_theta,
+            original_seq_len,
+            config.rope_factor,
         )
         self.freqs_cis = nn.Buffer(freqs_cis, persistent=False)  # [max T, Dr/2]
 
@@ -279,18 +286,23 @@ class Attention(nn.Module):
         kv = apply_partial_rope(kv, freqs_cis)  # [B, T, Dh]
         return q, kv
 
-    def attend(self, q: Tensor, kv: Tensor, visible: Tensor) -> Tensor:  # [B, T, H, Dh], [B, T, Dh]
-        scores = einsum32("bthd,bsd->bhts", q, kv)  # [B, H, T, T]
-        scores = scores * self.softmax_scale  # [B, H, T, T]
-        scores = scores.masked_fill(~visible, -torch.inf)  # [B, H, T, T]
+    def attend(
+        self,
+        q: Tensor,  # [B, T, H, Dh]
+        kv: Tensor,  # [B, T+C, Dh]
+        visible: Tensor,  # [T, T+C]
+    ) -> Tensor:
+        scores = einsum32("bthd,bsd->bhts", q, kv)  # [B, H, T, T+C]
+        scores = scores * self.softmax_scale  # [B, H, T, T+C]
+        scores = scores.masked_fill(~visible, -torch.inf)  # [B, H, T, T+C]
 
         sink = self.attn_sink.view(1, -1, 1, 1)  # [1, H, 1, 1]
         sink = sink.expand(scores.size(0), -1, scores.size(2), -1)  # [B, H, T, 1]
-        scores = torch.cat([scores, sink], dim=-1)  # [B, H, T, T+1]
+        scores = torch.cat([scores, sink], dim=-1)  # [B, H, T, T+C+1]
 
-        weights = scores.softmax(dim=-1)  # [B, H, T, T+1]
-        weights = weights[..., :-1]  # [B, H, T, T]
-        weights = weights.to(kv.dtype)  # [B, H, T, T]
+        weights = scores.softmax(dim=-1)  # [B, H, T, T+C+1]
+        weights = weights[..., :-1]  # [B, H, T, T+C]
+        weights = weights.to(kv.dtype)  # [B, H, T, T+C]
         return torch.einsum("bhts,bsd->bthd", weights, kv)  # [B, T, H, Dh]
 
     def project_out(self, o: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dh]
@@ -303,20 +315,18 @@ class Attention(nn.Module):
         return self.o_proj(o)  # [B, T, D]
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
-        if self.compressor:
-            c = self.compressor(x)  # [B, C, D]
-            freqs_cis = self.freqs_cis[: c.size(1) * self.compress_ratio : self.compress_ratio]
-            q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
-            kv = torch.cat(kv, c, dim=1)
-            visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
-            visible = torch.cat(
-                [visible, compressed_mask(x.size(1), self.compress_ratio, x.device)], dim=-1
-            )
-
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
-
         q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
+
+        if self.compressor is not None:
+            latents = self.compressor(x)  # [B, C, Dh]
+            latent_freqs = freqs_cis[: latents.size(1) : self.compress_ratio]  # [C, Dr/2]
+            latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
+            latent_visible = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
+            kv = torch.cat([kv, latents], dim=1)  # [B, T+C, Dh]
+            visible = torch.cat([visible, latent_visible], dim=-1)  # [T, T+C]
+
         o = self.attend(q, kv, visible)  # [B, T, H, Dh]
         return self.project_out(o, freqs_cis)  # [B, T, D]
 
@@ -434,7 +444,9 @@ class Transformer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.embed = Embedding(config.vocab_size, config.hidden_size)
-        self.blocks = nn.ModuleList(Block(config, i) for i in range(config.num_hidden_layers))
+        self.blocks = nn.ModuleList(
+            Block(config, layer_id) for layer_id in range(config.num_hidden_layers)
+        )
         self.out_norm = RMSNorm(config.hidden_size)
         self.head = Linear(config.hidden_size, config.vocab_size)
 
