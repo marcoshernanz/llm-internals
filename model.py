@@ -306,6 +306,12 @@ class Attention(nn.Module):
         if self.compressor:
             c = self.compressor(x)  # [B, C, D]
             freqs_cis = self.freqs_cis[: c.size(1) * self.compress_ratio : self.compress_ratio]
+            q, kv = self.queries_and_kv(x, freqs_cis)  # [B, T, H, Dh], [B, T, Dh]
+            kv = torch.cat(kv, c, dim=1)
+            visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
+            visible = torch.cat(
+                [visible, compressed_mask(x.size(1), self.compress_ratio, x.device)], dim=-1
+            )
 
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
