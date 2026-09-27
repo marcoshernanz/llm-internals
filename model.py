@@ -491,4 +491,4 @@ class Indexer(nn.Module):
         k = self.keys(keys, freqs_cis)  # [B, C, Di]
         w = self.weights_proj(x)  # [B, C, Hi]
 
-        einsum32("bthd,btd->bth", q, k)
+        einsum32("bthd,bcd->bthc", q, k)
