@@ -471,7 +471,7 @@ class Indexer(nn.Module):
             config.index_n_heads * config.index_head_dim,
         )
         self.weights_proj = Linear(config.hidden_size, config.index_n_heads)
-        self.k_proj = Linear()
+        self.k_proj = Linear(config.head_dim, config.index_head_dim)
         self.k_norm = RMSNorm()
 
     def forward(self, x: Tensor):
