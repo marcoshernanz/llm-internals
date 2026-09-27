@@ -303,6 +303,9 @@ class Attention(nn.Module):
         return self.o_proj(o)  # [B, T, D]
 
     def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        if self.compressor:
+            c = self.compressor(x)  # [B, C, D]
+
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
 
