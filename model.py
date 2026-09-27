@@ -235,6 +235,8 @@ class Attention(nn.Module):
         self.softmax_scale = self.head_dim**-0.5
         self.o_groups = config.o_groups
         self.o_lora_rank = config.o_lora_rank
+        self.sliding_window = config.sliding_window
+        self.compress_ratio = config.compress_ratios[layer_id]
 
         self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
         self.q_norm = RMSNorm(config.q_lora_rank)
