@@ -402,4 +402,7 @@ class Compressor(nn.Module):
         self.gate_proj = Linear(config.hidden_size, config.hidden_size)
 
     def forward(self, x: Tensor):  # [B, T, D]
-        g = self.gate_proj(x)
+        b, t, d = x.size()
+        g = self.gate_proj(x)  # [B, T, D]
+        g = g.view(b, t // m, m, d)  # [B, T/M, M, D]
+        g = g.softmax(dim=-2)
