@@ -200,24 +200,32 @@ class FeedForward(nn.Module):
 
 
 class Compressor(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, dim: int, head_dim: int, ratio: int) -> None:
         super().__init__()
-        self.gate_proj = Linear(config.hidden_size, config.hidden_size)
-        self.v_proj = Linear(config.hidden_size, config.hidden_size)
-        self.norm = RMSNorm(config.hidden_size)
+        self.ratio = ratio
+        self.kv_proj = Linear(dim, head_dim, float32=ratio > 1)
+        if ratio > 1:
+            self.gate_proj = Linear(dim, head_dim, float32=True)
+        self.norm = RMSNorm(head_dim)
 
-    def forward(self, x: Tensor):  # [B, T, D]
-        b, t, d = x.size()
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, D]
+        if self.ratio == 1:
+            kv = self.kv_proj(x)  # [B, T, Dh]
+            return self.norm(kv)  # [B, T, Dh]
 
-        g = self.gate_proj(x)  # [B, T, D]
-        g = g.view(b, t // m, m, d)  # [B, T/M, M, D]
-        g = g.softmax(dim=-2)
+        num_entries = x.size(1) // self.ratio  # C
+        x = x[:, : num_entries * self.ratio]  # [B, C*m, D]
 
-        v = self.v_proj(x)  # [B, T, D]
-        v = v.view(b, t // m, m, d)  # [B, T/M, M, D]
+        kv = self.kv_proj(x)  # [B, C*m, Dh]
+        kv = kv.unflatten(1, (-1, self.ratio))  # [B, C, m, Dh]
 
-        u = torch.einsum("bcmd,bcmd->bcd", g, v)  # [B, T/M, D]
-        return self.norm(u)  # [B, T/M, D]
+        gate = self.gate_proj(x)  # [B, C*m, Dh]
+        gate = gate.unflatten(1, (-1, self.ratio))  # [B, C, m, Dh]
+        weights = gate.softmax(dim=2)  # [B, C, m, Dh]
+
+        pooled = einsum32("bcmd,bcmd->bcd", kv, weights)  # [B, C, Dh]
+        pooled = pooled.to(x.dtype)  # [B, C, Dh]
+        return self.norm(pooled)  # [B, C, Dh]
 
 
 class Attention(nn.Module):
