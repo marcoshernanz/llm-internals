@@ -228,7 +228,7 @@ class Compressor(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
@@ -381,11 +381,11 @@ class HyperConnection(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
         self.attn_hc = HyperConnection(config.hidden_size)
         self.attn_norm = RMSNorm(config.hidden_size)
-        self.attn = Attention(config)
+        self.attn = Attention(config, layer_id)
         self.ffn_hc = HyperConnection(config.hidden_size)
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = MixtureOfExperts(config)
@@ -409,7 +409,7 @@ class Transformer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.embed = Embedding(config.vocab_size, config.hidden_size)
-        self.blocks = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
+        self.blocks = nn.ModuleList(Block(config, i) for i in range(config.num_hidden_layers))
         self.out_norm = RMSNorm(config.hidden_size)
         self.head = Linear(config.hidden_size, config.vocab_size)
 
