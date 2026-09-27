@@ -401,6 +401,7 @@ class Compressor(nn.Module):
         super().__init__()
         self.gate_proj = Linear(config.hidden_size, config.hidden_size)
         self.v_proj = Linear(config.hidden_size, config.hidden_size)
+        self.norm = RMSNorm(config.hidden_size)
 
     def forward(self, x: Tensor):  # [B, T, D]
         b, t, d = x.size()
@@ -412,4 +413,5 @@ class Compressor(nn.Module):
         v = self.v_proj(x)  # [B, T, D]
         v = v.view(b, t // m, m, d)  # [B, T/M, M, D]
 
-        u = einsum("bcmd,bcmd->bcd", g, v)
+        u = torch.einsum("bcmd,bcmd->bcd", g, v)  # [B, T/M, D]
+        return self.norm(u)  # [B, T/M, D]
