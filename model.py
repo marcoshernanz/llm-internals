@@ -235,35 +235,39 @@ class Compressor(nn.Module):
 
 
 class Indexer(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         super().__init__()
         self.index_n_heads = config.index_n_heads
         self.index_head_dim = config.index_head_dim
+        self.weights_scale = (self.index_n_heads * self.index_head_dim) ** -0.5
 
-        self.q_up_proj = Linear(
-            config.num_attention_heads * config.head_dim,
-            self.index_n_heads * self.index_head_dim,
-        )
+        self.q_up_proj = Linear(config.q_lora_rank, self.index_n_heads * self.index_head_dim)
         self.weights_proj = Linear(config.hidden_size, self.index_n_heads)
         self.k_proj = Linear(config.head_dim, self.index_head_dim)
         self.k_norm = RMSNorm(self.index_head_dim)
 
-    def keys(self, latents: Tensor, latent_freqs: Tensor):
-        k = self.k_proj(latents)
-        k = self.k_norm(k)
-        k = apply_partial_rope(k, latent_freqs)
-        return k
+    def keys(self, latents: Tensor, latent_freqs: Tensor) -> Tensor:  # [B, C, Dh], [C, Dr/2]
+        k = self.k_proj(latents)  # [B, C, Di]
+        k = self.k_norm(k)  # [B, C, Di]
+        return apply_partial_rope(k, latent_freqs)  # [B, C, Di]
 
-    def forward(self, x: Tensor, qr: Tensor, keys: Tensor, freqs_cis: Tensor):
-        q = self.q_up_proj(qr)  # [B, C, Hi*Di]
-        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))  # [B, C, Hi, Di]
-        q = apply_partial_rope(q, freqs_cis)
+    def forward(
+        self,
+        x: Tensor,  # [B, T, D]
+        qr: Tensor,  # [B, T, Dq]
+        keys: Tensor,  # [B, C, Di]
+        freqs_cis: Tensor,  # [T, Dr/2]
+    ) -> Tensor:
+        q = self.q_up_proj(qr)  # [B, T, Hi*Di]
+        q = q.unflatten(-1, (self.index_n_heads, self.index_head_dim))  # [B, T, Hi, Di]
+        q = apply_partial_rope(q, freqs_cis)  # [B, T, Hi, Di]
 
-        k = self.keys(keys, freqs_cis)  # [B, C, Di]
-        w = self.weights_proj(x)  # [B, C, Hi]
+        weights = self.weights_proj(x)  # [B, T, Hi]
+        weights = weights * self.weights_scale  # [B, T, Hi]
 
-        x = einsum32("bthd,bcd->bthc", q, k)
-        x = einsum32("bch,bthd->btd", w, x)
+        scores = einsum32("bthd,bcd->bthc", q, keys)  # [B, T, Hi, C]
+        scores = scores.relu()  # [B, T, Hi, C]
+        return einsum32("bthc,bth->btc", scores, weights)  # [B, T, C]
 
 
 class Attention(nn.Module):
