@@ -110,9 +110,7 @@ def sliding_window_mask(seq_len: int, window: int, device: torch.device) -> Tens
 def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     positions = torch.arange(seq_len, device=device)  # [T]
     distance = positions[:, None] - positions[None, :]  # [T, T]
-    causal = distance >= 0  # [T, T]
-    inside_window = distance < window  # [T, T]
-    return causal & inside_window  # [T, T]
+    return distance < (seq_len + 1) // ratio  # [T, T]
 
 
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
