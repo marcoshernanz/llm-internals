@@ -396,5 +396,9 @@ class Transformer(nn.Module):
         return self.head(x)  # [B, T, vocab]
 
 
-class Compressor:
-    pass
+class Compressor(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor):
+        pass
