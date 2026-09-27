@@ -114,6 +114,10 @@ def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     return entries[None, :] < complete[:, None]  # [T, C]
 
 
+def select_topk(scores: Tensor, visible: Tensor, k: int):
+    pass
+
+
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
     operands32 = [operand.float() for operand in operands]
     with torch.autocast(operands32[0].device.type, enabled=False):
