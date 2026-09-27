@@ -397,8 +397,9 @@ class Transformer(nn.Module):
 
 
 class Compressor(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
+        self.gate_proj = Linear(config.hidden_size, config.hidden_size)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor):  # [B, T, D]
         pass
