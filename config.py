@@ -5,8 +5,6 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    kv_source_layer_ids: tuple[int, ...]
-    index_source_layer_ids: tuple[int, ...]
     hidden_size: int  # D
     vocab_size: int  # rows of the embedding and of the head
     num_hidden_layers: int  # blocks in the stack
@@ -23,6 +21,8 @@ class Config:
     o_groups: int  # groups of heads in the output projection
     sliding_window: int  # recent tokens every layer attends to
     compress_ratios: tuple[int, ...]  # m per layer, 0 for sliding window only
+    kv_source_layer_ids: tuple[int, ...]  # Full layers, which compress their own main KV
+    index_source_layer_ids: tuple[int, ...]  # Full and Reindex layers, which run an indexer
     index_n_heads: int  # Hi, heads of the indexer
     index_head_dim: int  # Di, width of one indexer head
     index_topk: int  # k, compressed entries each query selects
@@ -48,6 +48,8 @@ V41_FLASH_CONFIG = Config(
     o_groups=8,
     sliding_window=128,
     compress_ratios=(0, 0) + (2,) * 18 + (1,) * 20 + (0, 0, 0),  # last three: DSpark layers
+    kv_source_layer_ids=(2, 8, 14, 20),
+    index_source_layer_ids=(2, 8, 14, 20, 24, 28, 32, 36),
     index_n_heads=32,
     index_head_dim=128,
     index_topk=512,
@@ -59,7 +61,7 @@ V41_FLASH_CONFIG = Config(
 TINY_CONFIG = Config(
     hidden_size=64,
     vocab_size=256,
-    num_hidden_layers=2,
+    num_hidden_layers=6,
     moe_intermediate_size=128,
     n_routed_experts=8,
     n_shared_experts=1,
@@ -72,7 +74,9 @@ TINY_CONFIG = Config(
     o_lora_rank=16,
     o_groups=2,
     sliding_window=8,
-    compress_ratios=(0, 2),
+    compress_ratios=(0, 2, 2, 1, 1, 1),
+    kv_source_layer_ids=(1, 3),
+    index_source_layer_ids=(1, 3, 4),
     index_n_heads=2,
     index_head_dim=16,
     index_topk=4,
