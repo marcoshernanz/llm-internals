@@ -268,7 +268,7 @@ class Compressor(nn.Module):
 
 
 class Indexer(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, owns_keys: bool) -> None:
         super().__init__()
         self.num_heads = config.index_n_heads
         self.head_dim = config.index_head_dim
@@ -276,8 +276,9 @@ class Indexer(nn.Module):
 
         self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
         self.weights_proj = Linear(config.hidden_size, self.num_heads)
-        self.k_proj = Linear(config.head_dim, self.head_dim)
-        self.k_norm = RMSNorm(self.head_dim)
+        if owns_keys:
+            self.k_proj = Linear(config.head_dim, self.head_dim)
+            self.k_norm = RMSNorm(self.head_dim)
 
     def keys(self, latents: Tensor, latent_freqs: Tensor) -> Tensor:  # [B, C, Dh], [C, Dr/2]
         latents = latents.detach()  # [B, C, Dh]
@@ -307,6 +308,15 @@ class Indexer(nn.Module):
         return einsum32("bthc,bth->btc", scores, weights)  # [B, T, C]
 
 
+class SharedAttention:
+    """What Full and Reindex layers hand down the stack. Layers run in order and every source
+    writes before the layers after it read, so one slot per tensor is enough."""
+
+    latents: Tensor  # [B, C, Dh], main KV after RoPE, from the latest Full layer
+    index_keys: Tensor  # [B, C, Di], from the latest Full layer
+    selected: Tensor  # [B, T, C], from the latest Full or Reindex layer
+
+
 class Attention(nn.Module):
     def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
@@ -330,14 +340,17 @@ class Attention(nn.Module):
         self.o_group_weight = nn.Parameter(group_weight)  # [G, Do, (H/G)*Dh]
         self.o_proj = Linear(self.o_groups * self.o_lora_rank, config.hidden_size)
 
-        if self.compress_ratio:
+        self.compressor: Compressor | None = None
+        self.indexer: Indexer | None = None
+        if layer_id in config.kv_source_layer_ids:
             self.compressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
-            self.indexer = Indexer(config)
+        if layer_id in config.index_source_layer_ids:
+            self.indexer = Indexer(config, owns_keys=self.compressor is not None)
+
+        if self.compress_ratio:
             rope_theta = COMPRESS_ROPE_THETA
             original_seq_len = config.original_max_position_embeddings
         else:
-            self.compressor = None
-            self.indexer = None
             rope_theta = ROPE_THETA
             original_seq_len = 0
 
@@ -393,35 +406,36 @@ class Attention(nn.Module):
         o = o.flatten(-2)  # [B, T, G*Do]
         return self.o_proj(o)  # [B, T, D]
 
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
+    def forward(self, x: Tensor, shared: SharedAttention) -> tuple[Tensor, Tensor]:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         qr, q = self.queries(x, freqs_cis)  # [B, T, Dq], [B, T, H, Dh]
         kv = self.window_kv(x, freqs_cis)  # [B, T, Dh]
         visible = sliding_window_mask(x.size(1), self.sliding_window, x.device)  # [T, T]
         visible = visible.expand(x.size(0), -1, -1)  # [B, T, T]
 
-        if self.compressor is None or self.indexer is None:
-            o, _ = self.attend(q, kv, visible)  # [B, T, H, Dh]
-            no_loss = torch.zeros((), device=x.device)  # scalar
-            return self.project_out(o, freqs_cis), no_loss  # [B, T, D], scalar
+        if self.compressor is not None and self.indexer is not None:
+            latents = self.compressor(x)  # [B, C, Dh]
+            latent_freqs = freqs_cis[:: self.compress_ratio]  # [ceil(T/m), Dr/2]
+            latent_freqs = latent_freqs[: latents.size(1)]  # [C, Dr/2]
+            shared.index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
+            shared.latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
 
-        latents = self.compressor(x)  # [B, C, Dh]
-        latent_freqs = freqs_cis[:: self.compress_ratio]  # [ceil(T/m), Dr/2]
-        latent_freqs = latent_freqs[: latents.size(1)]  # [C, Dr/2]
+        index_scores = None
+        if self.indexer is not None:
+            index_scores = self.indexer(x, qr, shared.index_keys, freqs_cis)  # [B, T, C]
+            complete = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
+            shared.selected = select_topk(index_scores, complete, self.index_topk)  # [B, T, C]
 
-        index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
-        index_scores = self.indexer(x, qr, index_keys, freqs_cis)  # [B, T, C]
-        latent_visible = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
-        selected = select_topk(index_scores, latent_visible, self.index_topk)  # [B, T, C]
+        if self.compress_ratio:
+            kv = torch.cat([kv, shared.latents], dim=1)  # [B, T+C, Dh]
+            visible = torch.cat([visible, shared.selected], dim=-1)  # [B, T, T+C]
 
-        latents = apply_partial_rope(latents, latent_freqs)  # [B, C, Dh]
-        kv = torch.cat([kv, latents], dim=1)  # [B, T+C, Dh]
-        visible = torch.cat([visible, selected], dim=-1)  # [B, T, T+C]
         o, probs = self.attend(q, kv, visible)  # [B, T, H, Dh], [B, H, T, T+C]
-
-        attention = probs[..., x.size(1) :]  # [B, H, T, C]
-        attention = attention.sum(dim=1)  # [B, T, C]
-        indexer_loss = indexer_kl(index_scores, attention, selected)  # scalar
+        indexer_loss = torch.zeros((), device=x.device)  # scalar
+        if index_scores is not None:
+            attention = probs[..., x.size(1) :]  # [B, H, T, C]
+            attention = attention.sum(dim=1)  # [B, T, C]
+            indexer_loss = indexer_kl(index_scores, attention, shared.selected)  # scalar
         return self.project_out(o, freqs_cis), indexer_loss  # [B, T, D], scalar
 
 
@@ -523,11 +537,12 @@ class Block(nn.Module):
         self,
         x: Tensor,  # [B, T, S, D]
         pre: Tensor,  # [B, T, S]
+        shared: SharedAttention,
     ) -> tuple[Tensor, Tensor, Tensor]:
         attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
         h = hc_pre(x, pre)  # [B, T, D]
         h = self.attn_norm(h)  # [B, T, D]
-        h, indexer_loss = self.attn(h)  # [B, T, D], scalar
+        h, indexer_loss = self.attn(h, shared)  # [B, T, D], scalar
         x = hc_post(h, x, attn_post, attn_comb)  # [B, T, S, D]
 
         ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
@@ -555,9 +570,10 @@ class Transformer(nn.Module):
         pre = torch.zeros(x.shape[:-1], dtype=torch.float32, device=x.device)  # [B, T, S]
         pre[..., 0] = 1.0  # [B, T, S]
 
+        shared = SharedAttention()
         indexer_loss = torch.zeros((), device=x.device)  # scalar
         for block in self.blocks:
-            x, pre, layer_loss = block(x, pre)  # [B, T, S, D], [B, T, S], scalar
+            x, pre, layer_loss = block(x, pre, shared)  # [B, T, S, D], [B, T, S], scalar
             indexer_loss = indexer_loss + layer_loss  # scalar
 
         x = hc_pre(x, pre)  # [B, T, D]
