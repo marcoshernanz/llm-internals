@@ -406,7 +406,8 @@ class Attention(nn.Module):
             return self.project_out(o, freqs_cis), no_loss  # [B, T, D], scalar
 
         latents = self.compressor(x)  # [B, C, Dh]
-        latent_freqs = freqs_cis[: latents.size(1) : self.compress_ratio]  # [C, Dr/2]
+        latent_freqs = freqs_cis[:: self.compress_ratio]  # [ceil(T/m), Dr/2]
+        latent_freqs = latent_freqs[: latents.size(1)]  # [C, Dr/2]
 
         index_keys = self.indexer.keys(latents, latent_freqs)  # [B, C, Di]
         index_scores = self.indexer(x, qr, index_keys, freqs_cis)  # [B, T, C]
