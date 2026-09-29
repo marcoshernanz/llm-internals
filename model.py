@@ -20,6 +20,7 @@ Shape letters used in the comments:
     Hi  heads of the indexer (index_n_heads)
     Di  width of one indexer head (index_head_dim)
     k   compressed entries each query selects (index_topk)
+    b   compressed entries per candidate block (candidate_block_size), C/b rounds up
 """
 
 import math
@@ -117,13 +118,41 @@ def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     return entries[None, :] < complete[:, None]  # [T, C]
 
 
-def select_topk(scores: Tensor, visible: Tensor, k: int) -> Tensor:  # [B, T, C], [T, C]
+def select_topk(
+    scores: Tensor,  # [B, T, C]
+    visible: Tensor,  # [T, C] or [B, T, C]
+    k: int,
+) -> Tensor:
     k = min(k, scores.size(-1))
     scores = scores.masked_fill(~visible, -torch.inf)  # [B, T, C]
     top = scores.topk(k, dim=-1)  # [B, T, k], [B, T, k]
     reachable = top.values > -torch.inf  # [B, T, k]
     selected = torch.zeros_like(scores, dtype=torch.bool)  # [B, T, C]
     return selected.scatter(-1, top.indices, reachable)  # [B, T, C]
+
+
+def select_candidates(
+    scores: Tensor,  # [B, T, C]
+    visible: Tensor,  # [T, C]
+    num_blocks: int,
+    block_size: int,
+) -> Tensor:
+    width = scores.size(-1)  # C
+    padding = -width % block_size  # entries missing from the last block
+    scores = scores.masked_fill(~visible, -torch.inf)  # [B, T, C]
+    scores = F.pad(scores, (0, padding), value=-torch.inf)  # [B, T, C/b*b]
+    blocks = scores.unflatten(-1, (-1, block_size))  # [B, T, C/b, b]
+    block_scores = blocks.amax(dim=-1)  # [B, T, C/b]
+
+    newest = (visible.sum(dim=-1) - 1) // block_size  # [T], block holding the newest entry
+    block_ids = torch.arange(block_scores.size(-1), device=scores.device)  # [C/b]
+    is_newest = block_ids[None, :] == newest[:, None]  # [T, C/b]
+    block_scores = block_scores.masked_fill(is_newest, torch.inf)  # [B, T, C/b], always kept
+
+    reachable = block_scores > -torch.inf  # [B, T, C/b]
+    kept = select_topk(block_scores, reachable, num_blocks)  # [B, T, C/b]
+    kept = kept.repeat_interleave(block_size, dim=-1)  # [B, T, C/b*b]
+    return kept[..., :width]  # [B, T, C]
 
 
 def indexer_kl(
@@ -267,16 +296,32 @@ class Compressor(nn.Module):
         return self.norm(pooled)  # [B, C, Dh]
 
 
+class SharedAttention:
+    """What Full and Reindex layers hand down the stack. Layers run in order and every source
+    writes before the layers after it read, so one slot per tensor is enough."""
+
+    latents: Tensor  # [B, C, Dh], main KV after RoPE, from the latest Full layer
+    index_keys: Tensor  # [B, C, Di], from the latest Full layer
+    selected: Tensor  # [B, T, C], from the latest Full or Reindex layer
+    candidates: Tensor  # [B, T, C], from the candidate source layer
+
+
 class Indexer(nn.Module):
-    def __init__(self, config: Config, owns_keys: bool) -> None:
+    def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
         self.num_heads = config.index_n_heads
         self.head_dim = config.index_head_dim
         self.weights_scale = (self.num_heads * self.head_dim) ** -0.5
+        self.compress_ratio = config.compress_ratios[layer_id]
+        self.topk = config.index_topk
+        self.candidate_topk_blocks = config.candidate_topk_blocks
+        self.candidate_block_size = config.candidate_block_size
+        self.is_candidate_source = layer_id == config.candidate_source_layer_id
+        self.uses_candidates = 0 <= config.candidate_source_layer_id < layer_id
 
         self.q_up_proj = Linear(config.q_lora_rank, self.num_heads * self.head_dim)
         self.weights_proj = Linear(config.hidden_size, self.num_heads)
-        if owns_keys:
+        if layer_id in config.kv_source_layer_ids:
             self.k_proj = Linear(config.head_dim, self.head_dim)
             self.k_norm = RMSNorm(self.head_dim)
 
@@ -307,14 +352,15 @@ class Indexer(nn.Module):
         scores = scores.relu()  # [B, T, Hi, C]
         return einsum32("bthc,bth->btc", scores, weights)  # [B, T, C]
 
-
-class SharedAttention:
-    """What Full and Reindex layers hand down the stack. Layers run in order and every source
-    writes before the layers after it read, so one slot per tensor is enough."""
-
-    latents: Tensor  # [B, C, Dh], main KV after RoPE, from the latest Full layer
-    index_keys: Tensor  # [B, C, Di], from the latest Full layer
-    selected: Tensor  # [B, T, C], from the latest Full or Reindex layer
+    def select(self, scores: Tensor, shared: SharedAttention) -> Tensor:  # [B, T, C]
+        searchable = compressed_mask(scores.size(1), self.compress_ratio, scores.device)  # [T, C]
+        if self.is_candidate_source:
+            shared.candidates = select_candidates(
+                scores, searchable, self.candidate_topk_blocks, self.candidate_block_size
+            )  # [B, T, C]
+        if self.uses_candidates:
+            searchable = searchable & shared.candidates  # [B, T, C]
+        return select_topk(scores, searchable, self.topk)  # [B, T, C]
 
 
 class Attention(nn.Module):
@@ -327,7 +373,6 @@ class Attention(nn.Module):
         self.o_lora_rank = config.o_lora_rank
         self.sliding_window = config.sliding_window
         self.compress_ratio = config.compress_ratios[layer_id]
-        self.index_topk = config.index_topk
 
         self.q_down_proj = Linear(config.hidden_size, config.q_lora_rank)
         self.q_norm = RMSNorm(config.q_lora_rank)
@@ -345,7 +390,7 @@ class Attention(nn.Module):
         if layer_id in config.kv_source_layer_ids:
             self.compressor = Compressor(config.hidden_size, self.head_dim, self.compress_ratio)
         if layer_id in config.index_source_layer_ids:
-            self.indexer = Indexer(config, owns_keys=self.compressor is not None)
+            self.indexer = Indexer(config, layer_id)
 
         if self.compress_ratio:
             rope_theta = COMPRESS_ROPE_THETA
@@ -423,8 +468,7 @@ class Attention(nn.Module):
         index_scores = None
         if self.indexer is not None:
             index_scores = self.indexer(x, qr, shared.index_keys, freqs_cis)  # [B, T, C]
-            complete = compressed_mask(x.size(1), self.compress_ratio, x.device)  # [T, C]
-            shared.selected = select_topk(index_scores, complete, self.index_topk)  # [B, T, C]
+            shared.selected = self.indexer.select(index_scores, shared)  # [B, T, C]
 
         if self.compress_ratio:
             kv = torch.cat([kv, shared.latents], dim=1)  # [B, T+C, Dh]
