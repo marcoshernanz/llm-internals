@@ -638,4 +638,5 @@ class Engram(nn.Module):
         v1 = token_ids[..., 1:, None] * self.m1
         v2 = token_ids[..., :-1, None] * self.m2
         x = (v1 ^ v2) % self.vocab_size
-        e = self.embeddings[x]
+        x = self.embeddings[x]
+        x = x.flatten(-1)
