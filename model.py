@@ -626,7 +626,7 @@ class Transformer(nn.Module):
 
 
 class Engram(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config):
         super().__init__()
 
         embeddings = nn.Parameter(torch.empty(8 * config.vocab_size, 256))
