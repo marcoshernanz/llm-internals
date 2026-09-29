@@ -623,3 +623,11 @@ class Transformer(nn.Module):
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x), indexer_loss  # [B, T, vocab], scalar
+
+
+class Engram(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self):
+        pass
