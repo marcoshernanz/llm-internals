@@ -29,6 +29,12 @@ class Config:
     candidate_source_layer_id: int  # layer whose indexer builds the candidate pool, -1 for none
     candidate_topk_blocks: int  # blocks kept in the candidate pool
     candidate_block_size: int  # b, compressed entries per block
+    engram_layer_ids: tuple[int, ...]  # layers whose input gets an Engram lookup
+    engram_max_ngram_size: int  # n, the longest n-gram; orders 2 to n are hashed
+    engram_n_heads: int  # He, hash heads per n-gram order
+    engram_head_dim: int  # De, width of one table row
+    engram_vocab_size: int  # rows per hash head, rounded up to a distinct prime
+    engram_pad_token_id: int  # fills the n-gram slots before the sequence starts
     max_position_embeddings: int  # rows in the RoPE table
     original_max_position_embeddings: int  # training length before the YaRN extension
     rope_factor: float  # YaRN extension factor
@@ -59,6 +65,12 @@ V41_FLASH_CONFIG = Config(
     candidate_source_layer_id=20,  # added in post-training, -1 while pre-training
     candidate_topk_blocks=2048,
     candidate_block_size=8,
+    engram_layer_ids=(1, 14),
+    engram_max_ngram_size=4,
+    engram_n_heads=8,
+    engram_head_dim=256,
+    engram_vocab_size=16_000_000,
+    engram_pad_token_id=2,
     max_position_embeddings=1_048_576,
     original_max_position_embeddings=65_536,
     rope_factor=16.0,
@@ -89,6 +101,12 @@ TINY_CONFIG = Config(
     candidate_source_layer_id=3,
     candidate_topk_blocks=4,
     candidate_block_size=2,
+    engram_layer_ids=(1, 2),
+    engram_max_ngram_size=4,
+    engram_n_heads=2,
+    engram_head_dim=16,
+    engram_vocab_size=1000,
+    engram_pad_token_id=2,
     max_position_embeddings=256,
     original_max_position_embeddings=16,
     rope_factor=16.0,
