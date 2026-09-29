@@ -636,6 +636,7 @@ class Engram(nn.Module):
 
         self.v_proj = Linear(8 * 256, config.hidden_size)
         self.k_proj = Linear(8 * 256, config.hidden_size)
+        self.w_proj = Linear(8 * 256, config.hidden_size)
 
     def forward(self, token_ids: Tensor):
         v1 = token_ids[..., 1:, None] * self.m1
@@ -647,3 +648,4 @@ class Engram(nn.Module):
 
         v = self.v_proj(x)
         k = self.k_proj(x)
+        w = self.w_proj(x)
