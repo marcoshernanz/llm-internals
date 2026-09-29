@@ -630,6 +630,8 @@ class Engram(nn.Module):
         super().__init__()
 
         embeddings = nn.Parameter(torch.empty(8 * config.vocab_size, 256))
+        self.m1 = torch.ones(8)
+        self.m2 = torch.ones(8)
 
     def forward(self, token_ids: Tensor):
         ids = token_ids[1:] * self.m1 * token_ids[..., :-1] * self.m2
