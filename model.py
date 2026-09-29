@@ -21,10 +21,15 @@ Shape letters used in the comments:
     Di  width of one indexer head (index_head_dim)
     k   compressed entries each query selects (index_topk)
     b   compressed entries per candidate block (candidate_block_size), C/b rounds up
+    n   tokens in the longest hashed n-gram (engram_max_ngram_size)
+    He  hash heads per n-gram order (engram_n_heads)
+    R   table rows each token looks up, (n-1)*He
+    De  width of one table row (engram_head_dim)
 """
 
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -42,6 +47,8 @@ HC_MULT = 4
 HC_SINKHORN_ITERS = 20
 HC_EPS = 1e-6
 HC_SCALE_INIT = 0.01
+ENGRAM_HASH_SEED = 10007
+ENGRAM_GATE_EPS = 1e-6
 
 
 def init_weights(module: nn.Module) -> None:
@@ -215,6 +222,34 @@ def rms_norm(x: Tensor, eps: float = NORM_EPS) -> Tensor:  # [..., dim]
     mean_square = x32.square().mean(dim=-1, keepdim=True)  # [..., 1]
     normed = x32 * torch.rsqrt(mean_square + eps)  # [..., dim]
     return normed.to(x.dtype)  # [..., dim]
+
+
+def is_prime(n: int) -> bool:
+    return n > 1 and all(n % divisor for divisor in range(2, math.isqrt(n) + 1))
+
+
+def primes_from(start: int, count: int) -> list[int]:
+    primes = []
+    candidate = start
+    while len(primes) < count:
+        if is_prime(candidate):
+            primes.append(candidate)
+        candidate += 1
+    return primes
+
+
+def hash_multipliers(layer_id: int, size: int, vocab_size: int) -> Tensor:
+    bound = torch.iinfo(torch.int64).max // vocab_size // 2  # id * multiplier stays inside int64
+    generator = np.random.default_rng(ENGRAM_HASH_SEED * layer_id)
+    multipliers = generator.integers(bound, size=size)  # [n]
+    multipliers = torch.from_numpy(multipliers)  # [n]
+    return 2 * multipliers + 1  # [n], odd
+
+
+def ngram_tokens(ids: Tensor, size: int, pad_id: int) -> Tensor:  # [B, T]
+    padded = F.pad(ids, (size - 1, 0), value=pad_id)  # [B, n-1+T]
+    windows = padded.unfold(-1, size, 1)  # [B, T, n], oldest first
+    return windows.flip(-1)  # [B, T, n], newest first
 
 
 class Linear(nn.Module):
@@ -567,9 +602,38 @@ class HyperConnection(nn.Module):
         return pre, post, comb  # [B, T, S], [B, T, S], [B, T, S, S]
 
 
+class Engram(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.vocab_size = config.vocab_size
+
+        self.embeddings = nn.Parameter(torch.empty(8 * self.vocab_size, 256))
+        self.m1 = torch.ones(8)
+        self.m2 = torch.ones(8)
+
+        self.v_proj = Linear(8 * 256, config.hidden_size)
+        self.k_proj = Linear(8 * 256, config.hidden_size)
+        self.w_proj = Linear(8 * 256, config.hidden_size)
+
+    def forward(self, token_ids: Tensor):
+        v1 = token_ids[..., 1:, None] * self.m1
+        v2 = token_ids[..., :-1, None] * self.m2
+        x = (v1 ^ v2) % self.vocab_size
+
+        x = self.embeddings[x]
+        x = x.flatten(-1)
+
+        v = self.v_proj(x)
+        k = self.k_proj(x)
+        w = self.w_proj(x)
+
+
 class Block(nn.Module):
     def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
+        self.engram: Engram | None = None
+        if layer_id in config.engram_layer_ids:
+            self.engram = Engram(config, layer_id)
         self.attn_hc = HyperConnection(config.hidden_size)
         self.attn_norm = RMSNorm(config.hidden_size)
         self.attn = Attention(config, layer_id)
@@ -581,8 +645,12 @@ class Block(nn.Module):
         self,
         x: Tensor,  # [B, T, S, D]
         pre: Tensor,  # [B, T, S]
+        ids: Tensor,  # [B, T]
         shared: SharedAttention,
     ) -> tuple[Tensor, Tensor, Tensor]:
+        if self.engram is not None:
+            x = self.engram(x, ids)  # [B, T, S, D]
+
         attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
         h = hc_pre(x, pre)  # [B, T, D]
         h = self.attn_norm(h)  # [B, T, D]
@@ -617,35 +685,9 @@ class Transformer(nn.Module):
         shared = SharedAttention()
         indexer_loss = torch.zeros((), device=x.device)  # scalar
         for block in self.blocks:
-            x, pre, layer_loss = block(x, pre, shared)  # [B, T, S, D], [B, T, S], scalar
+            x, pre, layer_loss = block(x, pre, ids, shared)  # [B, T, S, D], [B, T, S], scalar
             indexer_loss = indexer_loss + layer_loss  # scalar
 
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x), indexer_loss  # [B, T, vocab], scalar
-
-
-class Engram(nn.Module):
-    def __init__(self, config: Config):
-        super().__init__()
-        self.vocab_size = config.vocab_size
-
-        self.embeddings = nn.Parameter(torch.empty(8 * self.vocab_size, 256))
-        self.m1 = torch.ones(8)
-        self.m2 = torch.ones(8)
-
-        self.v_proj = Linear(8 * 256, config.hidden_size)
-        self.k_proj = Linear(8 * 256, config.hidden_size)
-        self.w_proj = Linear(8 * 256, config.hidden_size)
-
-    def forward(self, token_ids: Tensor):
-        v1 = token_ids[..., 1:, None] * self.m1
-        v2 = token_ids[..., :-1, None] * self.m2
-        x = (v1 ^ v2) % self.vocab_size
-
-        x = self.embeddings[x]
-        x = x.flatten(-1)
-
-        v = self.v_proj(x)
-        k = self.k_proj(x)
-        w = self.w_proj(x)
