@@ -629,5 +629,7 @@ class Engram(nn.Module):
     def __init__(self):
         super().__init__()
 
+        embeddings = nn.Parameter(torch.empty(8 * config.vocab_size, 256))
+
     def forward(self):
         pass
