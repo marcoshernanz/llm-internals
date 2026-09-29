@@ -603,29 +603,65 @@ class HyperConnection(nn.Module):
 
 
 class Engram(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
-        self.vocab_size = config.vocab_size
+        self.dim = config.hidden_size
+        self.max_ngram_size = config.engram_max_ngram_size
+        self.pad_id = config.engram_pad_token_id
+        num_orders = self.max_ngram_size - 1  # n-1
+        num_lookups = num_orders * config.engram_n_heads  # R
 
-        self.embeddings = nn.Parameter(torch.empty(8 * self.vocab_size, 256))
-        self.m1 = torch.ones(8)
-        self.m2 = torch.ones(8)
+        index = config.engram_layer_ids.index(layer_id)
+        drawn = primes_from(config.engram_vocab_size, (index + 1) * num_lookups)
+        primes = torch.tensor(drawn[-num_lookups:])  # [R], none shared with another layer
+        offsets = primes.cumsum(dim=0) - primes  # [R], first row of each hash head's range
+        multipliers = hash_multipliers(layer_id, self.max_ngram_size, config.vocab_size)  # [n]
+        self.primes = nn.Buffer(primes.view(num_orders, -1), persistent=False)  # [n-1, He]
+        self.offsets = nn.Buffer(offsets, persistent=False)  # [R]
+        self.multipliers = nn.Buffer(multipliers, persistent=False)  # [n]
 
-        self.v_proj = Linear(8 * 256, config.hidden_size)
-        self.k_proj = Linear(8 * 256, config.hidden_size)
-        self.w_proj = Linear(8 * 256, config.hidden_size)
+        self.table = Embedding(int(primes.sum()), config.engram_head_dim)
+        self.k_proj = Linear(num_lookups * config.engram_head_dim, HC_MULT * self.dim)
+        self.v_proj = Linear(num_lookups * config.engram_head_dim, self.dim)
+        self.q_weight = nn.Parameter(torch.ones(HC_MULT, self.dim))  # [S, D]
+        self.k_weight = nn.Parameter(torch.ones(HC_MULT, self.dim))  # [S, D]
 
-    def forward(self, token_ids: Tensor):
-        v1 = token_ids[..., 1:, None] * self.m1
-        v2 = token_ids[..., :-1, None] * self.m2
-        x = (v1 ^ v2) % self.vocab_size
+    def rows(self, ids: Tensor) -> Tensor:  # [B, T]
+        tokens = ngram_tokens(ids, self.max_ngram_size, self.pad_id)  # [B, T, n]
+        products = tokens * self.multipliers  # [B, T, n]
 
-        x = self.embeddings[x]
-        x = x.flatten(-1)
+        ngram_hashes = []
+        running = products[..., 0]  # [B, T]
+        for i in range(1, self.max_ngram_size):
+            running = running ^ products[..., i]  # [B, T], hash of the (i+1)-gram
+            ngram_hashes.append(running)
+        hashes = torch.stack(ngram_hashes, dim=-1)  # [B, T, n-1]
 
-        v = self.v_proj(x)
-        k = self.k_proj(x)
-        w = self.w_proj(x)
+        rows = hashes[..., None] % self.primes  # [B, T, n-1, He]
+        rows = rows.flatten(-2)  # [B, T, R]
+        return rows + self.offsets  # [B, T, R]
+
+    def forward(self, x: Tensor, ids: Tensor) -> Tensor:  # [B, T, S, D], [B, T]
+        rows = self.rows(ids)  # [B, T, R]
+        memory = self.table(rows)  # [B, T, R, De]
+        memory = memory.flatten(-2)  # [B, T, R*De]
+
+        value = self.v_proj(memory)  # [B, T, D]
+        key = self.k_proj(memory)  # [B, T, S*D]
+        key = key.unflatten(-1, (HC_MULT, self.dim))  # [B, T, S, D]
+
+        query = rms_norm(x.float()) * self.q_weight  # [B, T, S, D], the gate runs in float32
+        key = rms_norm(key.float()) * self.k_weight  # [B, T, S, D]
+        match = einsum32("btsd,btsd->bts", query, key)  # [B, T, S]
+        match = match * self.dim**-0.5  # [B, T, S]
+
+        gate = match.abs().clamp_min(ENGRAM_GATE_EPS)  # [B, T, S], keeps sqrt's gradient finite
+        gate = gate.sqrt().copysign(match)  # [B, T, S], signed square root
+        gate = gate.sigmoid()  # [B, T, S]
+
+        written = einsum32("bts,btd->btsd", gate, value)  # [B, T, S, D]
+        streams = x + written  # [B, T, S, D]
+        return streams.to(x.dtype)  # [B, T, S, D]
 
 
 class Block(nn.Module):
