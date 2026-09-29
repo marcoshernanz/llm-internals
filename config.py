@@ -26,6 +26,9 @@ class Config:
     index_n_heads: int  # Hi, heads of the indexer
     index_head_dim: int  # Di, width of one indexer head
     index_topk: int  # k, compressed entries each query selects
+    candidate_source_layer_id: int  # layer whose indexer builds the candidate pool, -1 for none
+    candidate_topk_blocks: int  # blocks kept in the candidate pool
+    candidate_block_size: int  # b, compressed entries per block
     max_position_embeddings: int  # rows in the RoPE table
     original_max_position_embeddings: int  # training length before the YaRN extension
     rope_factor: float  # YaRN extension factor
@@ -53,6 +56,9 @@ V41_FLASH_CONFIG = Config(
     index_n_heads=32,
     index_head_dim=128,
     index_topk=512,
+    candidate_source_layer_id=20,  # added in post-training, -1 while pre-training
+    candidate_topk_blocks=2048,
+    candidate_block_size=8,
     max_position_embeddings=1_048_576,
     original_max_position_embeddings=65_536,
     rope_factor=16.0,
@@ -80,6 +86,9 @@ TINY_CONFIG = Config(
     index_n_heads=2,
     index_head_dim=16,
     index_topk=4,
+    candidate_source_layer_id=3,
+    candidate_topk_blocks=4,
+    candidate_block_size=2,
     max_position_embeddings=256,
     original_max_position_embeddings=16,
     rope_factor=16.0,
