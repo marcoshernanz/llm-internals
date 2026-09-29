@@ -634,4 +634,4 @@ class Engram(nn.Module):
         self.m2 = torch.ones(8)
 
     def forward(self, token_ids: Tensor):
-        ids = token_ids[1:] * self.m1 * token_ids[..., :-1] * self.m2
+        ids = (token_ids[..., 1:, None] * self.m1) ^ (token_ids[..., :-1, None] * self.m2)
