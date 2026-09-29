@@ -634,6 +634,9 @@ class Engram(nn.Module):
         self.m1 = torch.ones(8)
         self.m2 = torch.ones(8)
 
+        self.v_proj = Linear(8 * 256, config.hidden_size)
+        self.k_proj = Linear(8 * 256, config.hidden_size)
+
     def forward(self, token_ids: Tensor):
         v1 = token_ids[..., 1:, None] * self.m1
         v2 = token_ids[..., :-1, None] * self.m2
