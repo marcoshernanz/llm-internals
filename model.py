@@ -635,4 +635,6 @@ class Engram(nn.Module):
         self.m2 = torch.ones(8)
 
     def forward(self, token_ids: Tensor):
-        ids = (token_ids[..., 1:, None] * self.m1) ^ (token_ids[..., :-1, None] * self.m2)
+        v1 = token_ids[..., 1:, None] * self.m1
+        v2 = token_ids[..., :-1, None] * self.m2
+        x = (v1 ^ v2) % self.vocab_size
