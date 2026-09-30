@@ -35,6 +35,13 @@ class Config:
     engram_head_dim: int  # De, width of one table row
     engram_vocab_size: int  # rows per hash head, rounded up to a distinct prime
     engram_pad_token_id: int  # fills the n-gram slots before the sequence starts
+    num_nextn_predict_layers: int  # DSpark blocks, numbered on from num_hidden_layers
+    dspark_block_size: int  # P, draft positions per block: the anchor, then placeholders
+    dspark_noise_token_id: int  # placeholder token in the draft positions after the anchor
+    dspark_target_layer_ids: tuple[int, ...]  # backbone layers whose input DSpark reads
+    dspark_markov_rank: int  # Dm, width of the Markov head's token vectors
+    dspark_n_routed_experts: int  # routed experts in each DSpark block
+    dspark_num_experts_per_tok: int  # routed experts active per draft token
     max_position_embeddings: int  # rows in the RoPE table
     original_max_position_embeddings: int  # training length before the YaRN extension
     rope_factor: float  # YaRN extension factor
@@ -71,6 +78,13 @@ V41_FLASH_CONFIG = Config(
     engram_head_dim=256,
     engram_vocab_size=16_000_000,
     engram_pad_token_id=2,
+    num_nextn_predict_layers=3,
+    dspark_block_size=5,
+    dspark_noise_token_id=128799,
+    dspark_target_layer_ids=(37, 38, 39),
+    dspark_markov_rank=256,
+    dspark_n_routed_experts=128,
+    dspark_num_experts_per_tok=3,
     max_position_embeddings=1_048_576,
     original_max_position_embeddings=65_536,
     rope_factor=16.0,
@@ -92,7 +106,7 @@ TINY_CONFIG = Config(
     o_lora_rank=16,
     o_groups=2,
     sliding_window=8,
-    compress_ratios=(0, 2, 2, 1, 1, 1),  # SWA, Full, Reuse, Full, Reindex, Reuse
+    compress_ratios=(0, 2, 2, 1, 1, 1, 0, 0),  # SWA, Full, Reuse, Full, Reindex, Reuse, DSpark
     kv_source_layer_ids=(1, 3),
     index_source_layer_ids=(1, 3, 4),
     index_n_heads=2,
@@ -107,6 +121,13 @@ TINY_CONFIG = Config(
     engram_head_dim=16,
     engram_vocab_size=1000,
     engram_pad_token_id=2,
+    num_nextn_predict_layers=2,
+    dspark_block_size=4,
+    dspark_noise_token_id=255,
+    dspark_target_layer_ids=(3, 4, 5),
+    dspark_markov_rank=8,
+    dspark_n_routed_experts=4,
+    dspark_num_experts_per_tok=1,
     max_position_embeddings=256,
     original_max_position_embeddings=16,
     rope_factor=16.0,
