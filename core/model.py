@@ -26,6 +26,11 @@ NORM_EPS = 1e-6
 INIT_STD = 0.02
 
 
+def init_weights(module: nn.Module) -> None:
+    if isinstance(module, (Linear, Embedding)):
+        nn.init.normal_(module.weight, std=INIT_STD)
+
+
 def rope_freqs_cis(dim: int, seq_len: int, theta: float, device: torch.device) -> Tensor:
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device) / dim))  # [Dr/2]
     positions = torch.arange(seq_len, device=device)  # [T]
@@ -48,7 +53,6 @@ class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int, float32: bool = False) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty(out_features, in_features))  # [out, in]
-        nn.init.normal_(self.weight, std=INIT_STD)
         self.float32 = float32
 
     def forward(self, x: Tensor) -> Tensor:  # [..., in]
@@ -62,7 +66,6 @@ class Embedding(nn.Module):
     def __init__(self, vocab_size: int, dim: int) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty(vocab_size, dim))  # [vocab, dim]
-        nn.init.normal_(self.weight, std=INIT_STD)
 
     def forward(self, ids: Tensor) -> Tensor:  # [B, T]
         return self.weight[ids]  # [B, T, D]
@@ -238,6 +241,7 @@ class Transformer(nn.Module):
         )
         self.out_norm = RMSNorm(config.hidden_size)
         self.head = Linear(config.hidden_size, config.vocab_size)
+        self.apply(init_weights)
 
     def forward(self, ids: Tensor) -> Tensor:  # [B, T]
         freqs_cis = rope_freqs_cis(
