@@ -162,7 +162,9 @@ class Router(nn.Module):
         self.num_experts_per_tok = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         self.score_proj = Linear(config.hidden_size, config.n_routed_experts, float32=True)
-        self.bias = nn.Buffer(torch.zeros(config.n_routed_experts))  # [E], set by the load balancer
+        self.bias = nn.Buffer(torch.zeros(config.n_routed_experts))  # [E], moved by update_bias
+        load = torch.zeros(config.n_routed_experts, dtype=torch.long)  # [E]
+        self.load = nn.Buffer(load, persistent=False)  # [E], tokens since the last update
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # [N, D]
         scores = self.score_proj(x)  # [N, E]
@@ -170,12 +172,21 @@ class Router(nn.Module):
 
         biased = scores + self.bias  # [N, E], the bias only decides which experts are picked
         expert_ids = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
+        if self.training:
+            picked = expert_ids.flatten()  # [N*K]
+            self.load += picked.bincount(minlength=self.load.size(0))  # [E]
 
         weights = scores.gather(-1, expert_ids)  # [N, K]
         if self.num_experts_per_tok > 1:  # normalizing a single weight would pin it to 1
             weights = weights / weights.sum(dim=-1, keepdim=True)  # [N, K]
         weights = weights * self.routed_scaling_factor  # [N, K]
         return weights, expert_ids
+
+    def update_bias(self, rate: float) -> None:
+        load = self.load.float()  # [E]
+        error = load.mean() - load  # [E], positive for experts that got too few tokens
+        self.bias += rate * error.sign()  # [E]
+        self.load.zero_()
 
 
 class MixtureOfExperts(nn.Module):
@@ -252,3 +263,8 @@ class Transformer(nn.Module):
             x = block(x, freqs_cis)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
         return self.head(x)  # [B, T, vocab]
+
+    def update_router_biases(self, rate: float) -> None:
+        for module in self.modules():
+            if isinstance(module, Router):
+                module.update_bias(rate)
