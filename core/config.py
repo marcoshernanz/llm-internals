@@ -1,4 +1,4 @@
-"""The sizes of one model, named as in a ``config.json`` (MLA and MoE names follow DeepSeek-V3)."""
+"""The sizes of one model, named as in a ``config.json`` (attention and MoE names follow DeepSeek)."""
 
 from dataclasses import dataclass
 
@@ -15,12 +15,10 @@ class Config:
     n_shared_experts: int  # experts that run for every token
     num_experts_per_tok: int  # K, routed experts active per token
     routed_scaling_factor: float  # scales the routed weights after normalizing
-    num_attention_heads: int  # H
+    num_attention_heads: int  # H, query heads over one shared key-value vector
+    head_dim: int  # Dh, also the width of the key-value vector
+    qk_rope_head_dim: int  # Dr, the last Dr of the Dh get RoPE
     q_lora_rank: int  # Dq, width of the query latent
-    kv_lora_rank: int  # Dc, width of the key-value latent
-    qk_nope_head_dim: int  # Dn, query and key dims per head without RoPE
-    qk_rope_head_dim: int  # Dr, query and key dims per head with RoPE
-    v_head_dim: int  # Dv, value dims per head
     rope_theta: float  # base of the RoPE frequencies
 
 
@@ -36,10 +34,8 @@ TINY_CONFIG = Config(
     num_experts_per_tok=2,
     routed_scaling_factor=2.5,
     num_attention_heads=4,
-    q_lora_rank=32,
-    kv_lora_rank=32,
-    qk_nope_head_dim=16,
+    head_dim=32,
     qk_rope_head_dim=8,
-    v_head_dim=16,
+    q_lora_rank=32,
     rope_theta=10000.0,
 )
