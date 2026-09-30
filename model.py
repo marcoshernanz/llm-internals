@@ -25,6 +25,10 @@ Shape letters used in the comments:
     He  hash heads per n-gram order (engram_n_heads)
     R   table rows each token looks up, (n-1)*He
     De  width of one table row (engram_head_dim)
+    L   backbone layers DSpark reads (dspark_target_layer_ids)
+    A   anchors per sequence, the positions draft blocks start from
+    P   draft positions per block, the anchor then placeholders (dspark_block_size)
+    Dm  width of the Markov head's token vectors (dspark_markov_rank)
 """
 
 import math
@@ -49,6 +53,9 @@ HC_EPS = 1e-6
 HC_SCALE_INIT = 0.01
 ENGRAM_HASH_SEED = 10007
 ENGRAM_GATE_EPS = 1e-6
+DSPARK_CE_WEIGHT = 0.1
+DSPARK_TV_WEIGHT = 0.9
+DSPARK_CONFIDENCE_WEIGHT = 1.0
 
 
 def init_weights(module: nn.Module) -> None:
@@ -84,17 +91,19 @@ def rope_freqs_cis(
     return torch.polar(torch.ones_like(angles), angles)  # [T, Dr/2] complex
 
 
-def apply_rope(x: Tensor, freqs_cis: Tensor, inverse: bool = False) -> Tensor:  # [B, T, H, Dr]
+def apply_rope(
+    x: Tensor,  # [B, T, H, Dr] or [B, T, Dr]
+    freqs_cis: Tensor,  # [T, Dr/2] or [B, T, Dr/2]
+    inverse: bool = False,
+) -> Tensor:
     pairs = x.float()  # [B, T, H, Dr]
     pairs = pairs.unflatten(-1, (-1, 2))  # [B, T, H, Dr/2, 2]
     pairs = torch.view_as_complex(pairs)  # [B, T, H, Dr/2] complex
 
     if inverse:
         freqs_cis = freqs_cis.conj()  # the conjugate rotates by minus the angle
-    if x.ndim == 3:
-        freqs_cis = freqs_cis.view(1, x.size(1), pairs.size(-1))  # [1, T, Dr/2]
-    else:
-        freqs_cis = freqs_cis.view(1, x.size(1), 1, pairs.size(-1))  # [1, T, 1, Dr/2]
+    if x.ndim == 4:
+        freqs_cis = freqs_cis.unsqueeze(-2)  # [B, T, 1, Dr/2], every head turns the same way
 
     rotated = pairs * freqs_cis  # [B, T, H, Dr/2] complex
     rotated = torch.view_as_real(rotated)  # [B, T, H, Dr/2, 2]
@@ -123,6 +132,21 @@ def compressed_mask(seq_len: int, ratio: int, device: torch.device) -> Tensor:
     entries = torch.arange(seq_len // ratio, device=device)  # [C]
     complete = (positions + 1) // ratio  # [T]
     return entries[None, :] < complete[:, None]  # [T, C]
+
+
+def draft_mask(anchors: Tensor, seq_len: int, block_size: int, window: int) -> Tensor:  # [B, A]
+    positions = torch.arange(seq_len, device=anchors.device)  # [T]
+    distance = anchors[..., None] - positions  # [B, A, T]
+    before_anchor = distance >= 1  # [B, A, T]
+    inside_window = distance <= window  # [B, A, T]
+    context = before_anchor & inside_window  # [B, A, T]
+    context = context.repeat_interleave(block_size, dim=1)  # [B, A*P, T]
+
+    block_ids = torch.arange(anchors.size(1), device=anchors.device)  # [A]
+    block_ids = block_ids.repeat_interleave(block_size)  # [A*P]
+    same_block = block_ids[:, None] == block_ids[None, :]  # [A*P, A*P], no causal mask inside
+    same_block = same_block.expand(anchors.size(0), -1, -1)  # [B, A*P, A*P]
+    return torch.cat([context, same_block], dim=-1)  # [B, A*P, T+A*P]
 
 
 def select_topk(
@@ -183,6 +207,47 @@ def indexer_kl(
     return kl.sum() / rows.numel()
 
 
+def sample_anchors(ids: Tensor, num_anchors: int, block_size: int) -> Tensor:  # [B, T]
+    num_choices = ids.size(1) - block_size - 1  # 1..T-P-1: context before, P targets after
+    weights = torch.ones(ids.size(0), num_choices, device=ids.device)  # [B, T-P-1]
+    anchors = torch.multinomial(weights, num_anchors)  # [B, A], distinct in each sequence
+    return anchors + 1  # [B, A]
+
+
+def dspark_loss(
+    draft_logits: Tensor,  # [B, A, P, vocab]
+    confidence: Tensor,  # [B, A, P], before the sigmoid
+    backbone_logits: Tensor,  # [B, T, vocab]
+    ids: Tensor,  # [B, T]
+    anchors: Tensor,  # [B, A]
+) -> Tensor:
+    offsets = torch.arange(draft_logits.size(2), device=ids.device)  # [P]
+    positions = anchors[..., None] + offsets  # [B, A, P]
+    batch = torch.arange(ids.size(0), device=ids.device)  # [B]
+    batch = batch[:, None, None]  # [B, 1, 1]
+    targets = ids[batch, positions + 1]  # [B, A, P], the true next tokens
+    backbone_probs = backbone_logits[batch, positions]  # [B, A, P, vocab]
+    backbone_probs = backbone_probs.detach().float().softmax(dim=-1)  # [B, A, P, vocab]
+
+    log_probs = draft_logits.float().log_softmax(dim=-1)  # [B, A, P, vocab]
+    draft_probs = log_probs.exp()  # [B, A, P, vocab]
+    ce = -log_probs.gather(-1, targets[..., None])  # [B, A, P, 1]
+    ce = ce.squeeze(-1)  # [B, A, P]
+
+    gap = draft_probs - backbone_probs  # [B, A, P, vocab]
+    tv = gap.abs().sum(dim=-1)  # [B, A, P], the paper's L1 distance between the two
+    acceptance = 1 - tv.detach() / 2  # [B, A, P], chance verification keeps the drafted token
+    bce = F.binary_cross_entropy_with_logits(confidence.float(), acceptance, reduction="none")
+
+    position_weights = torch.exp(-offsets / draft_logits.size(2))  # [P], earlier slots count more
+    loss = DSPARK_CE_WEIGHT * ce  # [B, A, P]
+    loss = loss + DSPARK_TV_WEIGHT * tv  # [B, A, P]
+    loss = loss + DSPARK_CONFIDENCE_WEIGHT * bce  # [B, A, P]
+    loss = loss * position_weights  # [B, A, P]
+    loss = loss.sum(dim=-1)  # [B, A]
+    return loss.mean()
+
+
 def einsum32(equation: str, *operands: Tensor) -> Tensor:
     operands32 = [operand.float() for operand in operands]
     with torch.autocast(operands32[0].device.type, enabled=False):
@@ -198,6 +263,14 @@ def sinkhorn(logits: Tensor) -> Tensor:  # [..., S, S]
         mix = mix / (mix.sum(dim=-1, keepdim=True) + HC_EPS)
         mix = mix / (mix.sum(dim=-2, keepdim=True) + HC_EPS)
     return mix  # [..., S, S]
+
+
+def hc_expand(x: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, D]
+    streams = x[:, :, None, :]  # [B, T, 1, D]
+    streams = streams.expand(-1, -1, HC_MULT, -1)  # [B, T, S, D]
+    pre = torch.zeros(streams.shape[:-1], dtype=torch.float32, device=x.device)  # [B, T, S]
+    pre[..., 0] = 1.0  # [B, T, S], the first block reads stream 0
+    return streams, pre
 
 
 def hc_pre(x: Tensor, pre: Tensor) -> Tensor:  # [B, T, S, D], [B, T, S]
@@ -486,6 +559,24 @@ class Attention(nn.Module):
         o = o.flatten(-2)  # [B, T, G*Do]
         return self.o_proj(o)  # [B, T, D]
 
+    def draft(
+        self,
+        x: Tensor,  # [B, A*P, D]
+        context: Tensor,  # [B, T, D]
+        positions: Tensor,  # [B, A*P]
+        visible: Tensor,  # [B, A*P, T+A*P]
+    ) -> Tensor:
+        freqs_cis = self.freqs_cis[positions]  # [B, A*P, Dr/2]
+        context_freqs = self.freqs_cis[: context.size(1)]  # [T, Dr/2]
+        _, q = self.queries(x, freqs_cis)  # [B, A*P, H, Dh]
+
+        context_kv = self.window_kv(context, context_freqs)  # [B, T, Dh]
+        draft_kv = self.window_kv(x, freqs_cis)  # [B, A*P, Dh]
+        kv = torch.cat([context_kv, draft_kv], dim=1)  # [B, T+A*P, Dh]
+
+        o, _ = self.attend(q, kv, visible)  # [B, A*P, H, Dh]
+        return self.project_out(o, freqs_cis)  # [B, A*P, D]
+
     def forward(self, x: Tensor, shared: SharedAttention) -> tuple[Tensor, Tensor]:  # [B, T, D]
         freqs_cis = self.freqs_cis[: x.size(1)]  # [T, Dr/2]
         qr, q = self.queries(x, freqs_cis)  # [B, T, Dq], [B, T, H, Dh]
@@ -519,10 +610,10 @@ class Attention(nn.Module):
 
 
 class Gate(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, n_routed_experts: int, num_experts_per_tok: int) -> None:
         super().__init__()
-        self.n_routed_experts = config.n_routed_experts
-        self.num_experts_per_tok = config.num_experts_per_tok
+        self.n_routed_experts = n_routed_experts
+        self.num_experts_per_tok = num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
 
         self.score_proj = Linear(config.hidden_size, self.n_routed_experts, float32=True)
@@ -536,20 +627,21 @@ class Gate(nn.Module):
         expert_ids = biased.topk(self.num_experts_per_tok, dim=-1).indices  # [N, K]
 
         weights = scores.gather(-1, expert_ids)  # [N, K]
-        weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
+        if self.num_experts_per_tok > 1:  # normalizing a single weight would pin it to 1
+            weights = weights / (weights.sum(dim=-1, keepdim=True) + NORM_EPS)  # [N, K]
         weights = weights * self.routed_scaling_factor  # [N, K]
         return weights, expert_ids
 
 
 class MixtureOfExperts(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, n_routed_experts: int, num_experts_per_tok: int) -> None:
         super().__init__()
         shared_size = config.n_shared_experts * config.moe_intermediate_size
 
-        self.gate = Gate(config)
+        self.gate = Gate(config, n_routed_experts, num_experts_per_tok)
         self.experts = nn.ModuleList(
             FeedForward(config.hidden_size, config.moe_intermediate_size)
-            for _ in range(config.n_routed_experts)
+            for _ in range(n_routed_experts)
         )
         self.shared_expert = FeedForward(config.hidden_size, shared_size)
 
@@ -667,7 +759,7 @@ class Engram(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: Config, layer_id: int) -> None:
         super().__init__()
-        self.engram: Engram | None = None
+        self.engram: Engram | None = None  # run by the Transformer, before DSpark reads the input
         if layer_id in config.engram_layer_ids:
             self.engram = Engram(config, layer_id)
         self.attn_hc = HyperConnection(config.hidden_size)
@@ -675,18 +767,14 @@ class Block(nn.Module):
         self.attn = Attention(config, layer_id)
         self.ffn_hc = HyperConnection(config.hidden_size)
         self.ffn_norm = RMSNorm(config.hidden_size)
-        self.ffn = MixtureOfExperts(config)
+        self.ffn = MixtureOfExperts(config, config.n_routed_experts, config.num_experts_per_tok)
 
     def forward(
         self,
         x: Tensor,  # [B, T, S, D]
         pre: Tensor,  # [B, T, S]
-        ids: Tensor,  # [B, T]
         shared: SharedAttention,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        if self.engram is not None:
-            x = self.engram(x, ids)  # [B, T, S, D]
-
         attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, T, S], [B, T, S], [B, T, S, S]
         h = hc_pre(x, pre)  # [B, T, D]
         h = self.attn_norm(h)  # [B, T, D]
@@ -701,29 +789,137 @@ class Block(nn.Module):
         return x, ffn_pre, indexer_loss
 
 
+class DSparkBlock(nn.Module):
+    def __init__(self, config: Config, layer_id: int) -> None:
+        super().__init__()
+        self.attn_hc = HyperConnection(config.hidden_size)
+        self.attn_norm = RMSNorm(config.hidden_size)
+        self.attn = Attention(config, layer_id)
+        self.ffn_hc = HyperConnection(config.hidden_size)
+        self.ffn_norm = RMSNorm(config.hidden_size)
+        self.ffn = MixtureOfExperts(
+            config, config.dspark_n_routed_experts, config.dspark_num_experts_per_tok
+        )
+
+    def forward(
+        self,
+        x: Tensor,  # [B, A*P, S, D]
+        pre: Tensor,  # [B, A*P, S]
+        context: Tensor,  # [B, T, D]
+        positions: Tensor,  # [B, A*P]
+        visible: Tensor,  # [B, A*P, T+A*P]
+    ) -> tuple[Tensor, Tensor]:
+        attn_pre, attn_post, attn_comb = self.attn_hc(x)  # [B, A*P, S], [B, A*P, S], [B, A*P, S, S]
+        h = hc_pre(x, pre)  # [B, A*P, D]
+        h = self.attn_norm(h)  # [B, A*P, D]
+        h = self.attn.draft(h, context, positions, visible)  # [B, A*P, D]
+        x = hc_post(h, x, attn_post, attn_comb)  # [B, A*P, S, D]
+
+        ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)  # [B, A*P, S], [B, A*P, S], [B, A*P, S, S]
+        h = hc_pre(x, attn_pre)  # [B, A*P, D]
+        h = self.ffn_norm(h)  # [B, A*P, D]
+        h = self.ffn(h)  # [B, A*P, D]
+        x = hc_post(h, x, ffn_post, ffn_comb)  # [B, A*P, S, D]
+        return x, ffn_pre
+
+
+class DSpark(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.block_size = config.dspark_block_size
+        self.noise_token_id = config.dspark_noise_token_id
+        self.sliding_window = config.sliding_window
+        num_targets = len(config.dspark_target_layer_ids)  # L
+        confidence_width = config.hidden_size + config.dspark_markov_rank  # D+Dm
+
+        self.context_proj = Linear(num_targets * config.hidden_size, config.hidden_size)
+        self.context_norm = RMSNorm(config.hidden_size)
+        self.blocks = nn.ModuleList(
+            DSparkBlock(config, config.num_hidden_layers + i)
+            for i in range(config.num_nextn_predict_layers)
+        )
+        self.out_norm = RMSNorm(config.hidden_size)
+        self.markov_embed = Embedding(config.vocab_size, config.dspark_markov_rank)
+        self.markov_proj = Linear(config.dspark_markov_rank, config.vocab_size)
+        self.confidence_proj = Linear(confidence_width, 1, float32=True)
+
+    def forward(
+        self,
+        ids: Tensor,  # [B, T]
+        target_hidden: Tensor,  # [B, T, L*D]
+        anchors: Tensor,  # [B, A], each in 1..T-P-1
+        embed_weight: Tensor,  # [vocab, D], the backbone's
+        head_weight: Tensor,  # [vocab, D], the backbone's
+    ) -> tuple[Tensor, Tensor]:
+        target_hidden = target_hidden.detach()  # [B, T, L*D], DSpark never trains the backbone
+        embed_weight = embed_weight.detach()  # [vocab, D]
+        head_weight = head_weight.detach()  # [vocab, D]
+
+        context = self.context_proj(target_hidden)  # [B, T, D]
+        context = self.context_norm(context)  # [B, T, D]
+
+        offsets = torch.arange(self.block_size, device=ids.device)  # [P]
+        positions = anchors[..., None] + offsets  # [B, A, P]
+        positions = positions.flatten(1)  # [B, A*P]
+        is_anchor = offsets == 0  # [P]
+        is_anchor = is_anchor.repeat(anchors.size(1))  # [A*P]
+        visible = draft_mask(anchors, ids.size(1), self.block_size, self.sliding_window)
+
+        previous_ids = ids.gather(1, positions)  # [B, A*P], the token before each predicted one
+        draft_ids = previous_ids.masked_fill(~is_anchor, self.noise_token_id)  # [B, A*P]
+        x = embed_weight[draft_ids]  # [B, A*P, D]
+        x, pre = hc_expand(x)  # [B, A*P, S, D], [B, A*P, S]
+        for block in self.blocks:
+            x, pre = block(x, pre, context, positions, visible)  # [B, A*P, S, D], [B, A*P, S]
+
+        hidden = hc_pre(x, pre)  # [B, A*P, D]
+        logits = self.out_norm(hidden)  # [B, A*P, D]
+        logits = F.linear(logits, head_weight)  # [B, A*P, vocab]
+
+        previous = self.markov_embed(previous_ids)  # [B, A*P, Dm]
+        bias = self.markov_proj(previous)  # [B, A*P, vocab], what tends to follow that token
+        logits = logits + bias  # [B, A*P, vocab]
+        logits = logits.unflatten(1, (-1, self.block_size))  # [B, A, P, vocab]
+
+        features = torch.cat([hidden, previous], dim=-1)  # [B, A*P, D+Dm]
+        confidence = self.confidence_proj(features)  # [B, A*P, 1]
+        confidence = confidence.squeeze(-1)  # [B, A*P]
+        confidence = confidence.unflatten(1, (-1, self.block_size))  # [B, A, P], before the sigmoid
+        return logits, confidence
+
+
 class Transformer(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
+        self.dspark_target_layer_ids = config.dspark_target_layer_ids
         self.embed = Embedding(config.vocab_size, config.hidden_size)
         self.blocks = nn.ModuleList(
             Block(config, layer_id) for layer_id in range(config.num_hidden_layers)
         )
         self.out_norm = RMSNorm(config.hidden_size)
         self.head = Linear(config.hidden_size, config.vocab_size)
+        self.dspark = DSpark(config)
 
-    def forward(self, ids: Tensor) -> tuple[Tensor, Tensor]:  # [B, T]
+    def forward(self, ids: Tensor) -> tuple[Tensor, Tensor, Tensor]:  # [B, T]
         x = self.embed(ids)  # [B, T, D]
-        x = x[:, :, None, :]  # [B, T, 1, D]
-        x = x.expand(-1, -1, HC_MULT, -1)  # [B, T, S, D]
-        pre = torch.zeros(x.shape[:-1], dtype=torch.float32, device=x.device)  # [B, T, S]
-        pre[..., 0] = 1.0  # [B, T, S]
+        x, pre = hc_expand(x)  # [B, T, S, D], [B, T, S]
 
         shared = SharedAttention()
         indexer_loss = torch.zeros((), device=x.device)  # scalar
-        for block in self.blocks:
-            x, pre, layer_loss = block(x, pre, ids, shared)  # [B, T, S, D], [B, T, S], scalar
+        target_hiddens = []
+        for layer_id, block in enumerate(self.blocks):
+            if isinstance(block.engram, Engram):
+                x = block.engram(x, ids)  # [B, T, S, D]
+            if layer_id in self.dspark_target_layer_ids:
+                layer_input = x.mean(dim=2)  # [B, T, D], the block's input, streams averaged
+                target_hiddens.append(layer_input)
+            x, pre, layer_loss = block(x, pre, shared)  # [B, T, S, D], [B, T, S], scalar
             indexer_loss = indexer_loss + layer_loss  # scalar
+        target_hidden = torch.cat(target_hiddens, dim=-1)  # [B, T, L*D]
 
         x = hc_pre(x, pre)  # [B, T, D]
         x = self.out_norm(x)  # [B, T, D]
-        return self.head(x), indexer_loss  # [B, T, vocab], scalar
+        return self.head(x), indexer_loss, target_hidden  # [B, T, vocab], scalar, [B, T, L*D]
+
+    def draft(self, ids: Tensor, target_hidden: Tensor, anchors: Tensor) -> tuple[Tensor, Tensor]:
+        return self.dspark(ids, target_hidden, anchors, self.embed.weight, self.head.weight)
