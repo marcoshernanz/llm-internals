@@ -11,6 +11,8 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/config.py` | model sizes, named as in a `config.json` |
 | `core/model.py` | the model |
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
+| `core/bench.py` | times training steps of a tiny and a wider model |
+| `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
@@ -23,6 +25,12 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 
 ```bash
 uv run python -m core.train
+```
+
+To run on a GPU instead, pass the module to `gpu.py`. Local changes are copied in on every run:
+
+```bash
+uv run modal run gpu.py --module core.train
 ```
 
 Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run ty check`.
