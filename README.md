@@ -1,7 +1,35 @@
 # deepseek-v4.1-flash
 
-An end-to-end reimplementation of DeepSeek-V4.1-Flash: model architecture, pre-training, post-training, RL, fused kernels, multi-GPU training and training schedules, finishing with a real training run.
+A minimal, from-scratch implementation of how a modern LLM works: model, pre-training, custom kernels and post-training. The goal is to learn the mechanisms, not to train a useful model, and each choice follows what most major model families agree on.
 
-The goal is not a functioning model, which is not possible on this budget. The goal is to learn as much as possible and to simulate everything DeepSeek did as accurately as possible.
+The project started as a reimplementation of DeepSeek-V4.1-Flash. That version is kept, frozen, in `deepseek_v41_flash/` with its spec in `deepseek_v41_flash/target.md`.
 
-The target is the [DeepSeek-V4.1-Flash technical report](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/resolve/main/DeepSeek_V41_Tech_Report.pdf). Where it defers to earlier work, that work is the reference: [DeepSeek-V4](https://arxiv.org/abs/2606.19348) for the optimizer configuration and inherited infrastructure, and through it [DeepSeek-V3](https://arxiv.org/abs/2412.19437) and [DeepSeek-V3.2](https://arxiv.org/abs/2512.02556). [docs/target.md](docs/target.md) holds the full specification, the chain of references and the reading order.
+## Layout
+
+| Path | Contents |
+|---|---|
+| `core/config.py` | model sizes, named as in a `config.json` |
+| `core/model.py` | the model |
+| `core/train.py` | minimal pre-training on TinyStories, one byte per token |
+| `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
+
+## The model
+
+- Pre-norm RMSNorm, plain residual connections, untied embedding and output head, no biases.
+- Attention is multi-head latent attention (MLA). Queries and keys/values each pass through a small latent with an RMSNorm, which serves as the query/key norm. Positions use decoupled RoPE without YaRN. A sigmoid output gate replaces an attention sink.
+- Feed-forward is SwiGLU. The first layer is dense. The others are mixture-of-experts: fine-grained routed experts plus one shared expert, sigmoid router scores, and load balancing through a per-expert bias instead of an auxiliary loss.
+
+## Running
+
+```bash
+uv run python -m core.train
+```
+
+Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run ty check`.
+
+## Roadmap
+
+1. Model. Done.
+2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
+3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA.
+4. Post-training: SFT, then RL with verifiable rewards, then on-policy distillation.
