@@ -12,7 +12,7 @@ from core.model import Transformer
 
 DATA_URL = "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt"
 DATA_PATH = Path("data/tinystories.txt")
-DEVICE = "cpu"  # at this size the Mac GPU is 3x slower: it waits on many tiny kernels
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # the Mac GPU is slower than its CPU here
 SEED = 1337
 
 SEQUENCE_LEN = 128
