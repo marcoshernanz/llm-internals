@@ -9,5 +9,5 @@
 - Keep the model to its core, listed in `README.md`. Don't add mechanisms unless asked.
 - Keep code simple and uncluttered: one step per line, at most one dimension change per line, a shape comment on every tensor line, and a docstring of shape letters at the top of model files.
 - `core/` is the active model. `deepseek_v41_flash/` is the earlier reimplementation of DeepSeek-V4.1-Flash, kept frozen for reference.
-- After every code change, run `uv run ruff format . && uv run ruff check . && uv run ty check && uv run pyright` and fix every error before reporting back. Run both type checkers: ty passes code that pyright (strict, the checker the editor shows) rejects.
+- After every code change, run `uv run ruff format . && uv run ruff check . && uv run ty check` and fix every error before reporting back. ty is the only type checker.
 - Don't commit. The user commits.
