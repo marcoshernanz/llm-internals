@@ -12,6 +12,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/model.py` | the model |
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
 | `core/bench.py` | times training steps of a tiny and a wider model |
+| `core/profile_step.py` | profiles those steps on a GPU and saves timelines to `out/` |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
@@ -32,6 +33,8 @@ To run on a GPU instead, pass the module to `gpu.py`. Local changes are copied i
 ```bash
 uv run modal run gpu.py --module core.train
 ```
+
+Files a run writes to `out/` come back to the local `out/`. Open profiler timelines in https://ui.perfetto.dev.
 
 Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run ty check`.
 
