@@ -35,6 +35,15 @@ def synchronize() -> None:
         torch.cuda.synchronize()  # the CPU only queues GPU work, so wait for it to finish
 
 
+def build(config: Config) -> tuple[Transformer, torch.optim.Optimizer, Tensor, Tensor]:
+    model = Transformer(config).to(DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters())
+    shape = (BATCH_SIZE, SEQUENCE_LEN)
+    inputs = torch.randint(config.vocab_size, shape, device=DEVICE)  # [B, T]
+    targets = torch.randint(config.vocab_size, shape, device=DEVICE)  # [B, T]
+    return model, optimizer, inputs, targets
+
+
 def train_step(
     model: Transformer, optimizer: torch.optim.Optimizer, inputs: Tensor, targets: Tensor
 ) -> None:  # [B, T], [B, T]
@@ -46,12 +55,7 @@ def train_step(
 
 
 def seconds_per_step(config: Config) -> float:
-    model = Transformer(config).to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters())
-    shape = (BATCH_SIZE, SEQUENCE_LEN)
-    inputs = torch.randint(config.vocab_size, shape, device=DEVICE)  # [B, T]
-    targets = torch.randint(config.vocab_size, shape, device=DEVICE)  # [B, T]
-
+    model, optimizer, inputs, targets = build(config)
     for _ in range(WARMUP_STEPS):
         train_step(model, optimizer, inputs, targets)
     synchronize()
