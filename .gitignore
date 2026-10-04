@@ -15,3 +15,6 @@ __pycache__/
 
 # Datasets
 data/
+
+# Run outputs (profiler timelines)
+out/
