@@ -13,6 +13,8 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
 | `core/bench.py` | times training steps of a tiny and a wider model |
 | `core/profile_step.py` | profiles those steps on a GPU and saves timelines to `out/` |
+| `core/kernels/rmsnorm.py` | RMSNorm as one fused Triton kernel, forward only |
+| `core/kernels/bench_rmsnorm.py` | checks that kernel against the model's RMSNorm and times it |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
@@ -36,11 +38,17 @@ uv run modal run gpu.py --module core.train
 
 Files a run writes to `out/` come back to the local `out/`. Open profiler timelines in https://ui.perfetto.dev.
 
+Triton runs only on Linux with an NVIDIA GPU, so kernels run through `gpu.py`. On macOS, install Triton's Python files so the editor and ty can read them. `uv sync` removes them again:
+
+```bash
+uv pip install --python .venv --python-platform x86_64-manylinux_2_28 --no-deps "triton==3.8.0"
+```
+
 Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run ty check`.
 
 ## Roadmap
 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
-3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA.
+3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and the RMSNorm forward kernel are done.
 4. Post-training: SFT, then RL with verifiable rewards, then on-policy distillation.
