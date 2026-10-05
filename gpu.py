@@ -14,7 +14,8 @@ TIMEOUT_SECONDS = 10 * 60  # longer than Modal's 5-minute default, still stops a
 OUT_DIR = Path("out")
 
 image = modal.Image.debian_slim(python_version="3.14")
-image = image.uv_pip_install("torch==2.14.0", "numpy==2.5.3")  # the versions in uv.lock
+# the versions in uv.lock
+image = image.uv_pip_install("torch==2.14.0", "numpy==2.5.3", "triton==3.8.0")
 image = image.add_local_python_source("core")
 app = modal.App("deepseek-v4-1-flash", image=image)
 
