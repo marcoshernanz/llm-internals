@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 *.egg-info/
 .ruff_cache/
-.pyright/
 .pytest_cache/
 .kaggle/
 .ipynb_checkpoints/
