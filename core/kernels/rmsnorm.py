@@ -8,7 +8,7 @@ def rmsnorm_kernel(x_ptr, w_ptr, out_ptr, stride_row, n_cols, eps, BLOCK: tl.con
     cols = tl.arange(0, BLOCK)  # [BLOCK]
     mask = cols < n_cols  # [BLOCK]
 
-    x = tl.load(x_ptr + row * stride_row + cols, mask)
+    x = tl.load(x_ptr + row * stride_row + cols, mask, other=0.0)
     x = x.to(tl.float32)
     w = tl.load(w_ptr + row * stride_row + cols, mask)
     w = w.to(tl.float32)
