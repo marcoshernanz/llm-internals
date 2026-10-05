@@ -5,6 +5,7 @@ requires-python = ">=3.14"
 dependencies = [
     "numpy>=2.5.3",
     "torch>=2.14.0",
+    "triton==3.8.0 ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
