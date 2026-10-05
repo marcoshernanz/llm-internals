@@ -16,6 +16,8 @@ def rmsnorm_kernel(x_ptr, w_ptr, out_ptr, stride_row, n_cols, eps, BLOCK: tl.con
     r = tl.rsqrt(tl.sum(x**2) / n_cols + eps)
     out = x * r * w
 
+    tl.store(out_ptr + row * stride_row + tl.arange(0, n_cols), mask)
+
     # tl.rsqrt()
     # 1. load this row of x and the weight w, as fp32
     # 2. r = 1 / sqrt(mean(x * x) + eps)    hint: tl.sum, tl.rsqrt
