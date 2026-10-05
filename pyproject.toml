@@ -31,3 +31,12 @@ root = ["."]
 
 [tool.ty.terminal]
 error-on-warning = true
+
+# ty can't match the types Triton gives its own functions (tl.sum, triton.next_power_of_2) or
+# launch options such as num_warps, so these two rules are off where kernels live.
+[[tool.ty.overrides]]
+include = ["core/kernels/**"]
+
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+unknown-argument = "ignore"
