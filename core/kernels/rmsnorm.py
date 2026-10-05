@@ -15,6 +15,7 @@ def rmsnorm_kernel(x_ptr, w_ptr, out_ptr, stride_row, n_cols, eps, BLOCK: tl.con
 
     r = tl.rsqrt(tl.sum(x**2) / n_cols + eps)
     out = x * r * w
+    out = out.to(out_ptr.dtype)
 
     tl.store(out_ptr + row * stride_row + tl.arange(0, n_cols), mask)
 
