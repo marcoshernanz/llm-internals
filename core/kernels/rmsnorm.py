@@ -10,7 +10,7 @@ def rmsnorm_kernel(x_ptr, w_ptr, out_ptr, stride_row, n_cols, eps, BLOCK: tl.con
 
     x = tl.load(x_ptr + row * stride_row + tl.arange(0, n_cols), mask)
     x = x.to(tl.float32)
-    w = tl.load(w_ptr, mask)
+    w = tl.load(w_ptr + row * stride_row + tl.arange(0, n_cols), mask)
     w = w.to(tl.float32)
 
     r = tl.rsqrt(tl.sum(x**2) / n_cols + eps)
