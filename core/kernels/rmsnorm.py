@@ -47,7 +47,7 @@ def rmsnorm_kernel(
     tl.store(inv_rms_pointer + row, inv_rms)
 
 
-def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> Tensor:  # [..., D], [D]
+def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> tuple[Tensor, Tensor]:  # [..., D], [D]
     rows = x.reshape(-1, x.shape[-1])  # [N, D], a view when x allows one
     assert rows.stride(1) == 1, "the kernel reads each row as one contiguous block"
     out = torch.empty(rows.shape, dtype=x.dtype, device=x.device)  # [N, D]
@@ -65,5 +65,6 @@ def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> Tensor:  # [..., D], [D]
         eps,
         BLOCK=block,
         num_warps=num_warps,
+        inv_rms
     )
-    return out.view(x.shape)  # [..., D]
+    return out.view(x.shape), inv_rms  # [..., D], [N]
