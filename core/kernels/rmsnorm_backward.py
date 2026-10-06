@@ -50,7 +50,7 @@ def rmsnorm_backward_kernel(
 
         inv_rms = tl.load(inv_rms_ptr + row)
 
-        x_hat = x * r
+        x_hat = x * inv_rms
 
 
 def rmsnorm_backward(
