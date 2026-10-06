@@ -54,6 +54,9 @@ def rmsnorm_backward_kernel(
         inv_rms = tl.load(inv_rms_ptr + row)  # [] one scalar, so no mask
 
         x_hat = x * inv_rms  # [BLOCK]
+
+        grad_w += grad_out * x_hat  # [BLOCK]
+
         h = grad_out * weight  # [BLOCK] the gradient arriving at x_hat
         h_x_hat = h * x_hat  # [BLOCK] the padding is 0, so it adds nothing to the sum
         c = tl.sum(h_x_hat, axis=0) / n_cols  # [] divide by D, not BLOCK
