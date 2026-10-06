@@ -30,7 +30,7 @@ def rmsnorm_backward_kernel(
     rows_per_program,
     BLOCK: tl.constexpr,
 ):
-    pass
+    program_id = tl.program_id(0)
 
 
 def rmsnorm_backward(
