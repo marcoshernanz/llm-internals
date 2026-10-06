@@ -56,8 +56,10 @@ def rmsnorm_backward_kernel(
         c = tl.sum(h * x_hat) / n_cols
 
         dx = inv_rms * (h - x_hat * c)
-
         dx = dx.to(grad_x_ptr.dtype.element_ty)
+
+        grad_x_ptrs = grad_x_ptr + row * grad_x_row_stride + cols  # [BLOCK]
+        tl.store(grad_x_ptrs, dx, mask=mask)
 
 
 def rmsnorm_backward(
