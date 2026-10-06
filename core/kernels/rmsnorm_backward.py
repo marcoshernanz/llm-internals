@@ -45,6 +45,8 @@ def rmsnorm_backward_kernel(
         grad_out = tl.load(grad_out_ptrs, mask=mask, other=0.0)  # [BLOCK]
         grad_out = grad_out.to(tl.float32)  # [BLOCK]
 
+        inv_rms = tl.load(inv_rms_ptr + row)
+
 
 def rmsnorm_backward(
     grad_out: Tensor,  # [..., D]
