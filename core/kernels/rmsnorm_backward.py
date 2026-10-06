@@ -31,6 +31,8 @@ def rmsnorm_backward_kernel(
     BLOCK: tl.constexpr,
 ):
     program_id = tl.program_id(0)
+    row_start = rows_per_program * program_id
+    row_end = tl.min(rows_per_program * (program_id + 1), n_rows)
 
 
 def rmsnorm_backward(
