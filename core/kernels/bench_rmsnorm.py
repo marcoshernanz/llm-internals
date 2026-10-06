@@ -17,7 +17,7 @@ from torch import Tensor, nn
 from triton.testing import do_bench
 
 from core.config import TINY_CONFIG
-from core.kernels.rmsnorm import rmsnorm, use_triton_rmsnorm
+from core.kernels.rmsnorm import TritonRMSNorm, rmsnorm, use_triton_rmsnorm
 from core.kernels.rmsnorm_backward import rmsnorm_backward
 from core.model import NORM_EPS, RMSNorm, Transformer
 
@@ -71,6 +71,10 @@ def check_model() -> None:
     model = Transformer(TINY_CONFIG).to(DEVICE)  # fp32, the plain PyTorch RMSNorm
     triton_model = copy.deepcopy(model)  # the same weights
     use_triton_rmsnorm(triton_model)
+    # otherwise both models would run plain PyTorch and every check below would pass trivially
+    for module in triton_model.modules():
+        if isinstance(module, RMSNorm):
+            assert isinstance(module, TritonRMSNorm), "use_triton_rmsnorm missed an RMSNorm"
     ids = torch.randint(TINY_CONFIG.vocab_size, (4, 65), device=DEVICE)  # [B, T+1]
     inputs = ids[:, :-1]  # [B, T]
     targets = ids[:, 1:]  # [B, T], each target is the next token
