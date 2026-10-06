@@ -53,6 +53,8 @@ def rmsnorm_backward_kernel(
         x_hat = x * inv_rms
         h = grad_out * weight
 
+        c = tl.sum(h * x_hat) / n_cols
+
 
 def rmsnorm_backward(
     grad_out: Tensor,  # [..., D]
