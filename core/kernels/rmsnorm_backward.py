@@ -51,6 +51,7 @@ def rmsnorm_backward_kernel(
         inv_rms = tl.load(inv_rms_ptr + row)
 
         x_hat = x * inv_rms
+        h = grad_out * weight
 
 
 def rmsnorm_backward(
