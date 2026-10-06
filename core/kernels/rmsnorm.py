@@ -65,6 +65,6 @@ def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> tuple[Tensor, Tensor]:  # 
         eps,
         BLOCK=block,
         num_warps=num_warps,
-        inv_rms
+        inv_rms=inv_rms,
     )
     return out.view(x.shape), inv_rms  # [..., D], [N]
