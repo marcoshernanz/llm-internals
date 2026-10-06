@@ -2,6 +2,10 @@
 RMSNorm backward as one Triton kernel: from the gradient of the output, the gradients of the input
 and of the weight.
 
+Each program walks a chunk of rows. It writes every row's input gradient, and sums its rows' share
+of the weight gradient in registers, writing that partial sum once at the end. The wrapper then
+adds up the P partial sums.
+
 Shape letters used in the comments:
     N       rows, every dimension but the last flattened together
     D       width of a row, the dimension being normalized
@@ -26,6 +30,7 @@ def rmsnorm_backward_kernel(
     grad_out_row_stride,
     x_row_stride,
     grad_x_row_stride,
+    grad_weight_partial_row_stride,
     n_rows,
     n_cols,
     rows_per_program,
@@ -39,8 +44,7 @@ def rmsnorm_backward_kernel(
 
     weight = tl.load(weight_ptr + cols, mask=mask, other=0.0)  # [BLOCK] once per program
     weight = weight.to(tl.float32)  # [BLOCK]
-
-    grad_w = tl.zeros([BLOCK], dtype=tl.float32)  # [BLOCK]
+    grad_weight = tl.zeros([BLOCK], dtype=tl.float32)  # [BLOCK] sum over this program's rows
 
     for row in range(row_start, row_end):
         grad_out_ptrs = grad_out_ptr + row * grad_out_row_stride + cols  # [BLOCK]
@@ -50,10 +54,10 @@ def rmsnorm_backward_kernel(
         x = tl.load(x_ptrs, mask=mask, other=0.0)  # [BLOCK]
         x = x.to(tl.float32)  # [BLOCK]
         inv_rms = tl.load(inv_rms_ptr + row)  # [] one scalar, so no mask
-
         x_hat = x * inv_rms  # [BLOCK]
 
-        grad_w += grad_out * x_hat  # [BLOCK]
+        grad_weight_row = grad_out * x_hat  # [BLOCK] g, not h: the weight's gradient has no w
+        grad_weight += grad_weight_row  # [BLOCK]
 
         h = grad_out * weight  # [BLOCK] the gradient arriving at x_hat
         h_x_hat = h * x_hat  # [BLOCK] the padding is 0, so it adds nothing to the sum
@@ -63,6 +67,9 @@ def rmsnorm_backward_kernel(
 
         grad_x_ptrs = grad_x_ptr + row * grad_x_row_stride + cols  # [BLOCK]
         tl.store(grad_x_ptrs, grad_x, mask=mask)
+
+    partial_row_ptr = grad_weight_partial_ptr + program * grad_weight_partial_row_stride  # []
+    tl.store(partial_row_ptr + cols, grad_weight, mask=mask)  # fp32, rounded after the sum
 
 
 def rmsnorm_backward(
@@ -79,8 +86,8 @@ def rmsnorm_backward(
     n_programs = torch.cuda.get_device_properties(x.device).multi_processor_count  # P
     rows_per_program = triton.cdiv(n_rows, n_programs)
     grad_x = torch.empty(x_rows.shape, dtype=x.dtype, device=x.device)  # [N, D]
-    # the kernel doesn't write these yet, so the weight gradient comes out as zeros
-    grad_weight_partial = torch.zeros(
+    # every program writes its whole row, even one with no rows to sum, so no zeroing is needed
+    grad_weight_partial = torch.empty(
         n_programs, n_cols, dtype=torch.float32, device=x.device
     )  # [P, D]
     block = triton.next_power_of_2(n_cols)
@@ -95,6 +102,7 @@ def rmsnorm_backward(
         grad_out_rows.stride(0),
         x_rows.stride(0),
         grad_x.stride(0),
+        grad_weight_partial.stride(0),
         n_rows,
         n_cols,
         rows_per_program,
