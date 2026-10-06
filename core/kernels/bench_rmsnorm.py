@@ -1,5 +1,5 @@
 """
-Check the Triton RMSNorm against the model's RMSNorm, then time both.
+Check the Triton RMSNorm and the 1 / RMS it saves against the model's RMSNorm, then time both.
 Run with ``modal run gpu.py --module core.kernels.bench_rmsnorm``.
 
 The timed input is a bf16 activation of 8 x 4096 tokens, 8192 wide: 537 MB. Any RMSNorm has to read
@@ -22,8 +22,13 @@ def check(x: Tensor) -> None:  # [..., D]
     norm = RMSNorm(x.shape[-1]).to(DEVICE)  # fp32 weight
     nn.init.normal_(norm.weight)  # random, so the multiply by the weight is checked too
     expected = norm(x.float())  # [..., D], all in fp32
-    actual = rmsnorm(x, norm.weight, NORM_EPS)  # [..., D]
+    actual, inv_rms = rmsnorm(x, norm.weight, NORM_EPS)  # [..., D], [N]
     torch.testing.assert_close(actual, expected.to(x.dtype))
+
+    mean_square = x.float().square().mean(dim=-1)  # [...]
+    expected_inv_rms = torch.rsqrt(mean_square + NORM_EPS)  # [...]
+    expected_inv_rms = expected_inv_rms.reshape(-1)  # [N]
+    torch.testing.assert_close(inv_rms, expected_inv_rms)  # also checks it is fp32
 
 
 def check_all() -> None:
@@ -32,7 +37,7 @@ def check_all() -> None:
         check(torch.randn(7, 1000, device=DEVICE, dtype=dtype))  # [N, D], D not a power of two
         kv = torch.randn(4, 16, 40, device=DEVICE, dtype=dtype)  # [B, T, Dc+Dr]
         check(kv[..., :32])  # [B, T, Dc], rows 40 apart, like the latent that kv_norm sees
-    print("matches the model's RMSNorm in fp32 and bf16")
+    print("output and saved 1 / RMS match the model's RMSNorm in fp32 and bf16")
 
 
 def report(label: str, ms: float, bytes_moved: int) -> None:
