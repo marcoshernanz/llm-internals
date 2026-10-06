@@ -3,7 +3,8 @@ RMSNorm as one Triton kernel: each row is read once, normalized in registers and
 It also saves each row's 1 / RMS, which the backward needs.
 
 RMSNormFunction ties this kernel and the backward kernel together so autograd can differentiate
-through them, and use_triton_rmsnorm swaps it into every RMSNorm of a model.
+through them. TritonRMSNorm is the model's RMSNorm running them, and use_triton_rmsnorm turns every
+RMSNorm of a model into one.
 
 Shape letters used in the comments:
     N       rows, every dimension but the last flattened together
@@ -11,7 +12,6 @@ Shape letters used in the comments:
     BLOCK   D rounded up to a power of two, the lanes of one program
 """
 
-import types
 from typing import Any
 
 import torch
@@ -102,14 +102,17 @@ class RMSNormFunction(torch.autograd.Function):
         return grad_x, grad_weight, None  # one per input of forward, None for eps
 
 
-def triton_rmsnorm_forward(self: RMSNorm, x: Tensor) -> Tensor:  # [..., D]
-    return RMSNormFunction.apply(x, self.weight, NORM_EPS)  # [..., D]
+class TritonRMSNorm(RMSNorm):
+    """The model's RMSNorm, with the same weight, running the two Triton kernels."""
+
+    def forward(self, x: Tensor) -> Tensor:  # [..., D]
+        return RMSNormFunction.apply(x, self.weight, NORM_EPS)  # [..., D]
 
 
 def use_triton_rmsnorm(model: nn.Module) -> None:
-    """Rebind the forward of every RMSNorm instance, the way Liger patches a model in place.
-    The RMSNorm class itself stays plain PyTorch, so it still runs where Triton can't."""
+    """Turn every RMSNorm of the model into a TritonRMSNorm in place, as
+    torch.nn.utils.parametrize does: each keeps its weight, so an optimizer built on it still works.
+    The RMSNorm class itself stays plain PyTorch, so model.py still runs where Triton can't."""
     for module in model.modules():
         if isinstance(module, RMSNorm):
-            forward = types.MethodType(triton_rmsnorm_forward, module)
-            module.__dict__["forward"] = forward  # an instance attribute wins over the class's
+            module.__class__ = TritonRMSNorm  # the same object, now with the subclass's forward
