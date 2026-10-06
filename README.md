@@ -13,8 +13,9 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
 | `core/bench.py` | times training steps of a tiny and a wider model |
 | `core/profile_step.py` | profiles those steps on a GPU and saves timelines to `out/` |
-| `core/kernels/rmsnorm.py` | RMSNorm as one fused Triton kernel, forward only |
-| `core/kernels/bench_rmsnorm.py` | checks that kernel against the model's RMSNorm and times it |
+| `core/kernels/rmsnorm.py` | RMSNorm forward as one fused Triton kernel, saving 1 / RMS per row |
+| `core/kernels/rmsnorm_backward.py` | RMSNorm backward as one Triton kernel, in progress |
+| `core/kernels/bench_rmsnorm.py` | checks the forward kernel against the model's RMSNorm and times it |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
