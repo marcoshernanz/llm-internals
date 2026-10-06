@@ -54,8 +54,10 @@ def train_step(
     optimizer.step()
 
 
-def seconds_per_step(config: Config) -> float:
-    model, optimizer, inputs, targets = build(config)
+def seconds_per_step(
+    model: Transformer, optimizer: torch.optim.Optimizer, inputs: Tensor, targets: Tensor
+) -> float:  # [B, T], [B, T]
+    """Warm up, then time training steps. It takes a built model, so a caller can change it first."""
     for _ in range(WARMUP_STEPS):
         train_step(model, optimizer, inputs, targets)
     synchronize()
@@ -70,8 +72,9 @@ def main() -> None:
     name = torch.cuda.get_device_name() if DEVICE == "cuda" else "cpu"
     print(f"device: {name}")
     for label, config in [("tiny", TINY_CONFIG), ("wide", WIDE_CONFIG)]:
-        params = sum(p.numel() for p in Transformer(config).parameters())
-        seconds = seconds_per_step(config)
+        model, optimizer, inputs, targets = build(config)
+        params = sum(p.numel() for p in model.parameters())
+        seconds = seconds_per_step(model, optimizer, inputs, targets)
         tokens_per_second = BATCH_SIZE * SEQUENCE_LEN / seconds
         print(
             f"{label}: {params / 1e6:.1f}M params, {seconds * 1000:.0f} ms/step, "
