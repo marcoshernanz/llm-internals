@@ -1,6 +1,6 @@
 """
 Check the Triton RMSNorm against the model's RMSNorm: the forward's output and saved 1 / RMS, and the
-backward's input gradient. Then time the forward.
+backward's input and weight gradients. Then time the forward.
 Run with ``modal run gpu.py --module core.kernels.bench_rmsnorm``.
 
 The timed input is a bf16 activation of 8 x 4096 tokens, 8192 wide: 537 MB. Any RMSNorm has to read
@@ -38,10 +38,15 @@ def check_backward(x: Tensor) -> None:  # [..., D]
     nn.init.normal_(norm.weight)  # random, so the multiply by the weight is checked too
     grad_out = torch.randn_like(x)  # [..., D]
     x_ref = x.float().clone().requires_grad_()  # [..., D], a copy, so x itself stays untouched
-    (expected,) = torch.autograd.grad(norm(x_ref), x_ref, grad_out.float())  # [..., D]
+    expected_grad_x, expected_grad_weight = torch.autograd.grad(
+        norm(x_ref), (x_ref, norm.weight), grad_out.float()
+    )  # [..., D], [D]
     _, inv_rms = rmsnorm(x, norm.weight, NORM_EPS)  # [N]
-    actual, _ = rmsnorm_backward(grad_out, x, norm.weight, inv_rms)  # [..., D]
-    torch.testing.assert_close(actual, expected.to(x.dtype))
+    grad_x, grad_weight = rmsnorm_backward(grad_out, x, norm.weight, inv_rms)  # [..., D], [D]
+    torch.testing.assert_close(grad_x, expected_grad_x.to(x.dtype))
+    # both fp32, like the weight. PyTorch adds the N rows in another order, and with 1000 rows the
+    # sums reach ~30, where fp32 steps are ~2e-6: results can differ by ~2e-5, past the default 1e-5
+    torch.testing.assert_close(grad_weight, expected_grad_weight, rtol=1.3e-6, atol=1e-4)
 
 
 def check_all() -> None:
@@ -54,7 +59,7 @@ def check_all() -> None:
         for x in (tiny, odd, latent):
             check(x)
             check_backward(x)
-    print("output, saved 1 / RMS and input gradient match the model's RMSNorm in fp32 and bf16")
+    print("output, saved 1 / RMS and both gradients match the model's RMSNorm in fp32 and bf16")
 
 
 def report(label: str, ms: float, bytes_moved: int) -> None:
