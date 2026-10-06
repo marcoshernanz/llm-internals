@@ -9,8 +9,6 @@ Shape letters used in the comments:
     P       programs launched, one per SM, each taking a chunk of the rows
 """
 
-from numpy import dtype
-
 import torch
 import triton
 import triton.language as tl
