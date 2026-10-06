@@ -36,6 +36,9 @@ def rmsnorm_backward_kernel(
     cols = tl.arange(0, BLOCK)  # [BLOCK]
     mask = cols < n_cols  # [BLOCK] False on the padding past D
 
+    weight = tl.load(weight_ptr + cols, mask=mask, other=0.0)  # [BLOCK]
+    weight = weight.to(tl.float32)  # [BLOCK]
+
     for row in range(row_start, row_end):
         x_ptrs = x_ptr + row * x_row_stride + cols  # [BLOCK]
         x = tl.load(x_ptrs, mask=mask, other=0.0)  # [BLOCK]
