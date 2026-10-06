@@ -12,7 +12,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/model.py` | the model |
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
 | `core/bench.py` | times training steps of a tiny and a wider model |
-| `core/profile_step.py` | profiles those steps on a GPU and saves timelines to `out/` |
+| `core/profile_step.py` | profiles those steps on a GPU, as written and with the Triton RMSNorm swapped in, and saves timelines to `out/` |
 | `core/kernels/rmsnorm.py` | RMSNorm forward as one fused Triton kernel, the `autograd.Function` joining it to the backward, and `TritonRMSNorm`, the model's RMSNorm running both, which `use_triton_rmsnorm` swaps in |
 | `core/kernels/rmsnorm_backward.py` | RMSNorm backward as one Triton kernel, for the input and weight gradients |
 | `core/kernels/bench_rmsnorm.py` | checks both kernels and the tiny model with them swapped in against PyTorch, then times forward and backward |
