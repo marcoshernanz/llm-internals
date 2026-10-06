@@ -34,9 +34,12 @@ def rmsnorm_backward_kernel(
     row_start = rows_per_program * program_id
     row_end = tl.min(rows_per_program * (program_id + 1), n_rows)
     cols = tl.arange(0, BLOCK)  # [BLOCK]
+    mask = cols < n_cols  # [BLOCK] False on the padding past D
 
     for row in range(row_start, row_end):
         x_ptrs = x_ptr + row * x_row_stride + cols  # [BLOCK]
+        x = tl.load(x_ptrs, mask=mask, other=0.0)  # [BLOCK]
+        x = x.to(tl.float32)  # [BLOCK]
 
 
 def rmsnorm_backward(
