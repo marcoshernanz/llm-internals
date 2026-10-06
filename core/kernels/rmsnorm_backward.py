@@ -9,6 +9,8 @@ Shape letters used in the comments:
     P       programs launched, one per SM, each taking a chunk of the rows
 """
 
+from numpy import dtype
+
 import torch
 import triton
 import triton.language as tl
@@ -39,6 +41,8 @@ def rmsnorm_backward_kernel(
 
     weight = tl.load(weight_ptr + cols, mask=mask, other=0.0)  # [BLOCK] once per program
     weight = weight.to(tl.float32)  # [BLOCK]
+
+    grad_w = tl.zeros([BLOCK], dtype=tl.float32)  # [BLOCK]
 
     for row in range(row_start, row_end):
         grad_out_ptrs = grad_out_ptr + row * grad_out_row_stride + cols  # [BLOCK]
