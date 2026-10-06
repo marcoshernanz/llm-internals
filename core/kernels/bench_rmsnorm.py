@@ -1,5 +1,6 @@
 """
-Check the Triton RMSNorm and the 1 / RMS it saves against the model's RMSNorm, then time both.
+Check the Triton RMSNorm against the model's RMSNorm: the forward's output and saved 1 / RMS, and the
+backward's input gradient. Then time the forward.
 Run with ``modal run gpu.py --module core.kernels.bench_rmsnorm``.
 
 The timed input is a bf16 activation of 8 x 4096 tokens, 8192 wide: 537 MB. Any RMSNorm has to read
@@ -12,6 +13,7 @@ from torch import Tensor, nn
 from triton.testing import do_bench
 
 from core.kernels.rmsnorm import rmsnorm
+from core.kernels.rmsnorm_backward import rmsnorm_backward
 from core.model import NORM_EPS, RMSNorm
 
 DEVICE = "cuda"
@@ -31,19 +33,35 @@ def check(x: Tensor) -> None:  # [..., D]
     torch.testing.assert_close(inv_rms, expected_inv_rms)  # also checks it is fp32
 
 
+def check_backward(x: Tensor) -> None:  # [..., D]
+    norm = RMSNorm(x.shape[-1]).to(DEVICE)  # fp32 weight
+    nn.init.normal_(norm.weight)  # random, so the multiply by the weight is checked too
+    grad_out = torch.randn_like(x)  # [..., D]
+    x_ref = x.float().clone().requires_grad_()  # [..., D], a copy, so x itself stays untouched
+    (expected,) = torch.autograd.grad(norm(x_ref), x_ref, grad_out.float())  # [..., D]
+    _, inv_rms = rmsnorm(x, norm.weight, NORM_EPS)  # [N]
+    actual, _ = rmsnorm_backward(grad_out, x, norm.weight, inv_rms)  # [..., D]
+    torch.testing.assert_close(actual, expected.to(x.dtype))
+
+
 def check_all() -> None:
     for dtype in (torch.float32, torch.bfloat16):
-        check(torch.randn(4, 16, 64, device=DEVICE, dtype=dtype))  # [B, T, D], the tiny model
-        check(torch.randn(7, 1000, device=DEVICE, dtype=dtype))  # [N, D], D not a power of two
+        tiny = torch.randn(4, 16, 64, device=DEVICE, dtype=dtype)  # [B, T, D], the tiny model
+        # D not a power of two, and N not a multiple of the SM count: the last chunk is shorter
+        odd = torch.randn(1000, 1000, device=DEVICE, dtype=dtype)  # [N, D]
         kv = torch.randn(4, 16, 40, device=DEVICE, dtype=dtype)  # [B, T, Dc+Dr]
-        check(kv[..., :32])  # [B, T, Dc], rows 40 apart, like the latent that kv_norm sees
-    print("output and saved 1 / RMS match the model's RMSNorm in fp32 and bf16")
+        latent = kv[..., :32]  # [B, T, Dc], rows 40 apart, like the latent that kv_norm sees
+        for x in (tiny, odd, latent):
+            check(x)
+            check_backward(x)
+    print("output, saved 1 / RMS and input gradient match the model's RMSNorm in fp32 and bf16")
 
 
 def report(label: str, ms: float, bytes_moved: int) -> None:
     print(f"  {label:<28} {ms:5.2f} ms  {bytes_moved / ms / 1e6:4.0f} GB/s")
 
 
+@torch.no_grad()
 def time_all() -> None:
     x = torch.randn(TIMED_SHAPE, device=DEVICE, dtype=torch.bfloat16)  # [B, T, D]
     norm = RMSNorm(x.shape[-1]).to(DEVICE, torch.bfloat16)
@@ -60,7 +78,6 @@ def time_all() -> None:
     report("Triton", do_bench(lambda: rmsnorm(x, norm.weight, NORM_EPS)), bytes_moved)
 
 
-@torch.no_grad()
 def main() -> None:
     print(f"device: {torch.cuda.get_device_name()}")
     check_all()
