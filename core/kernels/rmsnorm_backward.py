@@ -34,6 +34,9 @@ def rmsnorm_backward_kernel(
     row_start = rows_per_program * program_id
     row_end = tl.min(rows_per_program * (program_id + 1), n_rows)
 
+    for row in range(row_start, row_end):
+        pass
+
 
 def rmsnorm_backward(
     grad_out: Tensor,  # [..., D]
