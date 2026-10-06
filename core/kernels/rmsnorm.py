@@ -22,6 +22,7 @@ def rmsnorm_kernel(
     out_row_stride,
     n_cols,
     eps,
+    inv_rms_pointer,
     BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0)  # one program per row
@@ -43,6 +44,7 @@ def rmsnorm_kernel(
 
     out_ptrs = out_ptr + row * out_row_stride + cols  # [BLOCK]
     tl.store(out_ptrs, out, mask=mask)
+    tl.store(inv_rms_pointer + row, inv_rms)
 
 
 def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> Tensor:  # [..., D], [D]
