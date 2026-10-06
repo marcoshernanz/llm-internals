@@ -13,9 +13,9 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/train.py` | minimal pre-training on TinyStories, one byte per token |
 | `core/bench.py` | times training steps of a tiny and a wider model |
 | `core/profile_step.py` | profiles those steps on a GPU and saves timelines to `out/` |
-| `core/kernels/rmsnorm.py` | RMSNorm forward as one fused Triton kernel, saving 1 / RMS per row |
+| `core/kernels/rmsnorm.py` | RMSNorm forward as one fused Triton kernel, the `autograd.Function` joining it to the backward, and `use_triton_rmsnorm` to swap both into a model |
 | `core/kernels/rmsnorm_backward.py` | RMSNorm backward as one Triton kernel, for the input and weight gradients |
-| `core/kernels/bench_rmsnorm.py` | checks both kernels against the model's RMSNorm and times the forward |
+| `core/kernels/bench_rmsnorm.py` | checks both kernels and the tiny model with them swapped in against PyTorch, then times forward and backward |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
@@ -51,5 +51,5 @@ Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run 
 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
-3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and the RMSNorm forward and backward kernels are done.
+3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and RMSNorm (forward, backward and autograd) are done.
 4. Post-training: SFT, then RL with verifiable rewards, then on-policy distillation.
