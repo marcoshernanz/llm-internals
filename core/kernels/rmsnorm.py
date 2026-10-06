@@ -51,6 +51,7 @@ def rmsnorm(x: Tensor, weight: Tensor, eps: float) -> Tensor:  # [..., D], [D]
     rows = x.reshape(-1, x.shape[-1])  # [N, D], a view when x allows one
     assert rows.stride(1) == 1, "the kernel reads each row as one contiguous block"
     out = torch.empty(rows.shape, dtype=x.dtype, device=x.device)  # [N, D]
+    inv_rms = torch.empty(rows.size(0))  # [N]
     n_rows, n_cols = rows.shape
     block = triton.next_power_of_2(n_cols)
     num_warps = min(max(block // 256, 1), 8)  # 8 elements per lane, up to 8 warps
