@@ -85,7 +85,7 @@ RL on Qwen math improves scores even with *random* rewards, because RL surfaces 
 Full fine-tuning with AdamW keeps 16 bytes per parameter: 4 for the fp32 weights, 4 for the gradients and 8 for Adam's two moments.
 
 - **0.6B:** 9.6 GB, which fits a T4.
-- **1.7B:** 27 GB, which fits neither a T4 nor an L4. Stage 2 solves this.
+- **1.7B:** 27 GB, which fits neither a T4 nor an L4. Even split across both T4s, 13.5 GB a card leaves no room for activations. Stage 2 solves this.
 
 ### Mac: write and debug every loop
 
@@ -98,6 +98,10 @@ Every loop runs here first, with 0.6B on 8–64 examples.
 
 About 120 free hours a month.
 
+- **Two cards for one clock.** A session gets both T4s and is billed once, so the second card is free. Use it as follows:
+  - **Paired runs, one per card:** a fix and its baseline, or a run and its random-reward control.
+  - **The 8B model in NF4 next to the student:** as stage 6's judge and as stage 7's teacher.
+  - **Generation and training on separate cards** (stage 9).
 - **No bf16 on a T4.** Train in fp16 with fp32 master weights and loss scaling. This is a lesson in why the frontier moved to bf16.
 - **Trap:** under fp16 an RL step can overflow and be skipped while the reward still logs normally, so log skipped steps.
 - **No FlashAttention.** PyTorch's attention falls back to its memory-efficient kernel.
@@ -116,7 +120,7 @@ TPUs need JAX or torch_xla, and RL's variable-length generation keeps forcing XL
 
 ### Budget, est.
 
-- **40–60 T4-hours across all stages,** about two weeks of Kaggle quota.
+- **40–60 T4-hours across all stages.** Paired runs share a session's clock, so this is 1–2 weeks of Kaggle quota.
 - **$15–25 of Modal credit** for the 1.7B and teacher work.
 - **Stage 4 uses the most:** a GRPO step takes 1–3 minutes at 0.6B, and a run is 50–100 steps.
 
@@ -203,7 +207,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The random-reward control.
   - A rank-1 LoRA run.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
-- **Runs on:** Kaggle.
+- **Runs on:** Kaggle. Each fix runs on one card next to its baseline on the other.
 
 ### 5. Multi-turn environments and tools
 
@@ -229,7 +233,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Ai2 and Meta keep DPO: OLMo 3 runs it before RL, and Llama 4 runs a light pass at the end.
   - The Chinese labs have no preference stage. They score answers inside RL with generative judges and rubrics; in DeepSeek V4 the judge is the policy itself.
   - We build both, and the judge is where the frontier is heading.
-- **Runs on:** Kaggle; the judge on Modal.
+- **Runs on:** Kaggle, with the 8B judge in NF4 on the second card.
 
 ### 7. On-policy distillation
 
@@ -243,7 +247,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - pass@k doesn't shrink.
   - One student matches each specialist on that specialist's domain.
 - **Frontier:** the 2026 consensus final stage (DeepSeek V4 and V4.1, Nemotron 3 Ultra, Kimi K3, MiMo, GLM-5, Qwen3).
-- **Runs on:** Modal L4, or Kaggle with stage 2's NF4 teacher.
+- **Runs on:** Kaggle, with stage 2's NF4 teacher on one card and the student on the other. Or Modal L4, with the teacher in bf16.
 
 ### 8. Self-distillation
 
