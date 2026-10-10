@@ -105,18 +105,30 @@ class KVCache:
         dtype: torch.dtype,
         device: torch.device,
     ) -> None:
-        shape = (batch_size, max_len, config.num_key_value_heads, config.head_dim)
-        self.k = torch.zeros(shape, dtype=dtype, device=device)  # [B, L, G, Dh]
-        self.v = torch.zeros(shape, dtype=dtype, device=device)  # [B, L, G, Dh]
+        shape = (batch_size, config.num_key_value_heads, max_len, config.head_dim)
+        self.k = torch.zeros(shape, dtype=dtype, device=device)  # [B, G, L, Dh]
+        self.v = torch.zeros(shape, dtype=dtype, device=device)  # [B, G, L, Dh]
         self.length = 0  # positions filled so far
 
-    def update(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, G, Dh] each
+    def update(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:  # [B, G, T, Dh] each
         """Store the keys and values of T new positions; return those of every position so far."""
         start = self.length
-        self.length = start + k.size(1)
-        self.k[:, start : self.length] = k  # [B, T, G, Dh] written into [B, L, G, Dh]
-        self.v[:, start : self.length] = v  # [B, T, G, Dh] written into [B, L, G, Dh]
-        return self.k[:, : self.length], self.v[:, : self.length]  # [B, S, G, Dh] each
+        self.length = start + k.size(2)
+        self.k[:, :, start : self.length] = k  # [B, G, T, Dh] written into [B, G, L, Dh]
+        self.v[:, :, start : self.length] = v  # [B, G, T, Dh] written into [B, G, L, Dh]
+        return self.k[:, :, : self.length], self.v[:, :, : self.length]  # [B, G, S, Dh] each
+
+
+def attend(q: Tensor, k: Tensor, v: Tensor, scale: float) -> Tensor:  # [B, H, T, Dh], [B, G, S, Dh]
+    """Causal attention of T new queries over S keys, the last T of which belong to the new tokens.
+    One fused kernel: each query head reads its group's key-value head where it lies, with no
+    copy per query head, and the scores never leave the chip."""
+    cached = k.size(2) - q.size(2)  # positions before the new tokens, 0 without a cache
+    causal = torch.ones(q.size(2), k.size(2), dtype=torch.bool, device=q.device)  # [T, S]
+    causal = causal.tril(diagonal=cached)  # [T, S], new token t sees keys 0..cached+t
+    return F.scaled_dot_product_attention(
+        q, k, v, attn_mask=causal, scale=scale, enable_gqa=True
+    )  # [B, H, T, Dh]
 
 
 class Attention(nn.Module):
@@ -143,31 +155,23 @@ class Attention(nn.Module):
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
         q = self.q_norm(q)  # [B, T, H, Dh], each head's query normed on its own
         q = apply_rope(q, freqs_cis)  # [B, T, H, Dh]
+        q = q.transpose(1, 2)  # [B, H, T, Dh], the layout attention kernels take
 
         k = self.k_proj(x)  # [B, T, G*Dh]
         k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))  # [B, T, G, Dh]
         k = self.k_norm(k)  # [B, T, G, Dh]
         k = apply_rope(k, freqs_cis)  # [B, T, G, Dh]
+        k = k.transpose(1, 2)  # [B, G, T, Dh]
 
         v = self.v_proj(x)  # [B, T, G*Dh]
         v = v.unflatten(-1, (self.num_kv_heads, self.head_dim))  # [B, T, G, Dh]
+        v = v.transpose(1, 2)  # [B, G, T, Dh]
 
         if cache is not None:
-            k, v = cache.update(k, v)  # [B, S, G, Dh] each, the cached positions then the new
+            k, v = cache.update(k, v)  # [B, G, S, Dh] each, the cached positions then the new
 
-        group_size = self.num_heads // self.num_kv_heads  # H/G
-        k = k.repeat_interleave(group_size, dim=2)  # [B, S, H, Dh], neighboring heads share one
-        v = v.repeat_interleave(group_size, dim=2)  # [B, S, H, Dh]
-
-        cached = k.size(1) - q.size(1)  # positions before the new tokens, 0 without a cache
-        causal = torch.ones(q.size(1), k.size(1), dtype=torch.bool, device=x.device)  # [T, S]
-        causal = causal.tril(diagonal=cached)  # [T, S], new token t sees keys 0..cached+t
-        scores = torch.einsum("bthd,bshd->bhts", q, k)  # [B, H, T, S]
-        scores = scores.float() * self.softmax_scale  # [B, H, T, S]
-        scores = scores.masked_fill(~causal, -torch.inf)  # [B, H, T, S]
-        probs = scores.softmax(dim=-1)  # [B, H, T, S]
-        probs = probs.to(v.dtype)  # [B, H, T, S]
-        o = torch.einsum("bhts,bshd->bthd", probs, v)  # [B, T, H, Dh]
+        o = attend(q, k, v, self.softmax_scale)  # [B, H, T, Dh]
+        o = o.transpose(1, 2)  # [B, T, H, Dh]
         o = o.flatten(-2)  # [B, T, H*Dh]
         return self.o_proj(o)  # [B, T, D]
 
