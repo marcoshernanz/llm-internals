@@ -22,6 +22,7 @@ import torch
 import torch.nn.functional as F
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
+from tokenizers import Tokenizer
 from torch import Tensor, nn
 
 
@@ -204,3 +205,9 @@ def load_qwen3(repo_id: str, dtype: torch.dtype, device: str) -> Qwen3:
     weights = {name.removeprefix("model."): tensor for name, tensor in weights.items()}
     model.load_state_dict(weights)  # strict: every tensor must fill a parameter, and back
     return model.to(device=device, dtype=dtype)
+
+
+def load_tokenizer(repo_id: str) -> Tokenizer:
+    """The checkpoint's tokenizer, a byte-level BPE read from its tokenizer.json."""
+    path = Path(snapshot_download(repo_id, allow_patterns=["tokenizer.json"]))
+    return Tokenizer.from_file(str(path / "tokenizer.json"))
