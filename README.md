@@ -21,8 +21,9 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/qwen3.py` | Qwen3 in our own code, loading the released checkpoints from the Hugging Face Hub |
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/generate.py` | generates text the simplest way, rerunning the whole sequence for every new token, and times each token |
-| `post/sampler.py` | generates text with a KV cache: the prompt once, then one token per step, with the same timing table |
+| `post/sampler.py` | generates a batch of samples with a KV cache: the prompt once, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
 | `post/check_kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
+| `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
