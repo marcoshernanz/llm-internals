@@ -18,6 +18,8 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/kernels/bench_rmsnorm.py` | checks both kernels and the tiny model with them swapped in against PyTorch, then times forward and backward |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
+| `post/qwen3.py` | Qwen3 in our own code, loading the released checkpoints from the Hugging Face Hub |
+| `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
