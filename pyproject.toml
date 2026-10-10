@@ -6,6 +6,7 @@ dependencies = [
     "huggingface-hub>=2.2.0",
     "numpy>=2.5.3",
     "safetensors>=0.8.0",
+    "tokenizers>=0.23.3",
     "torch>=2.14.0",
     "triton==3.8.0 ; sys_platform == 'linux'",
 ]
