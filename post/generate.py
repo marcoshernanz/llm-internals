@@ -5,6 +5,7 @@ each token costs more than the one before; the timing table at the end shows it.
 Run with ``uv run python -m post.generate``.
 
 Shape letters used in the comments:
+    B   sequences sampled at once (1 in this file's loop)
     T   sequence length, the prompt plus the tokens generated so far
     V   vocabulary size
 """
@@ -30,12 +31,13 @@ TEMPERATURE = 1.0  # 0 always picks the likeliest token
 WINDOW = 50  # new tokens per line of the timing table
 
 
-def sample(logits: Tensor, temperature: float) -> Tensor:  # [1, V]
+def sample(logits: Tensor, temperature: float) -> Tensor:  # [B, V]
+    """One next token per row, each drawn from its own row's distribution."""
     if temperature == 0:
-        return logits.argmax(dim=-1, keepdim=True)  # [1, 1]
-    scaled = logits.float() / temperature  # [1, V], below 1 sharpens, above 1 flattens
-    probs = scaled.softmax(dim=-1)  # [1, V]
-    return torch.multinomial(probs, num_samples=1)  # [1, 1]
+        return logits.argmax(dim=-1, keepdim=True)  # [B, 1]
+    scaled = logits.float() / temperature  # [B, V], below 1 sharpens, above 1 flattens
+    probs = scaled.softmax(dim=-1)  # [B, V]
+    return torch.multinomial(probs, num_samples=1)  # [B, 1]
 
 
 @torch.no_grad()
