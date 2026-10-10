@@ -58,8 +58,16 @@ def generate(
     return ids, seconds  # [1, T + new tokens]
 
 
+def print_timing(prompt_length: int, seconds: list[float]) -> None:
+    print(f"\nsequence length: ms per new token, averaged over the next {WINDOW} new tokens")
+    for start in range(0, len(seconds), WINDOW):
+        window = seconds[start : start + WINDOW]  # the times of 50 new tokens in a row
+        ms = 1000 * sum(window) / len(window)  # their average
+        length = prompt_length + start  # how long the sequence was for the first of them
+        print(f"{length:>4} tokens: {ms:4.0f} ms")
+
+
 def main() -> None:
-    torch.manual_seed(0)
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
     stop_id = tokenizer.token_to_id("<|endoftext|>")
@@ -68,18 +76,14 @@ def main() -> None:
     ids = torch.tensor([prompt_ids], device=DEVICE)  # [1, T]
     generate(model, ids, 1, TEMPERATURE, stop_id)  # the first call sets up the GPU: not timed
 
+    torch.manual_seed(0)  # after the warm-up: both scripts draw the same random numbers
     ids, seconds = generate(model, ids, MAX_NEW_TOKENS, TEMPERATURE, stop_id)  # [1, T]
     new_ids = ids[0, len(prompt_ids) :].tolist()
     print(PROMPT + tokenizer.decode(new_ids))
     ending = "stopped at" if new_ids[-1] == stop_id else "never wrote"
     print(f"\n{len(new_ids)} new tokens, {ending} <|endoftext|>")
 
-    print(f"\nsequence length: ms per new token, averaged over the next {WINDOW} new tokens")
-    for start in range(0, len(seconds), WINDOW):
-        window = seconds[start : start + WINDOW]  # the times of 50 new tokens in a row
-        ms = 1000 * sum(window) / len(window)  # their average
-        length = len(prompt_ids) + start  # how long the sequence was for the first of them
-        print(f"{length:>4} tokens: {ms:4.0f} ms")
+    print_timing(len(prompt_ids), seconds)
     lengths = [len(prompt_ids) + i for i in range(len(seconds))]  # the sequence read at each step
     print(f"{sum(lengths):,} positions run through the model to write {len(seconds)} tokens")
 
