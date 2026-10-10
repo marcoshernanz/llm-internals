@@ -276,7 +276,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Datasets (`datasets`).
   - `transformers`, only to check our logits.
 - **Write:** everything else. TRL, verl, Unsloth and vLLM are code to read, not run.
-- **Where:** `post/`, one file per mechanism, with the same style rules as `core/`. Qwen3 uses the same RMSNorm and epsilon (1e-6) as `core/model.py`, so the Triton RMSNorm drops straight in.
+- **Where:** `post/`, one file per mechanism, with the same style rules as `core/`. Qwen3's RMSNorm does the same math with the same epsilon (1e-6) as `core/model.py`, so the Triton RMSNorm kernel computes it too.
 - **Read alongside:**
   - `reasoning-from-scratch`: pure-PyTorch GRPO on Qwen3-0.6B, one mechanism per file. It took MATH-500 from 15.2% to 47.4% in 50 steps.
   - `nanochat`: `chat_sft.py` and `chat_rl.py`.
