@@ -4,7 +4,9 @@ module is named as in the checkpoint, so the checkpoint's tensors load by name.
 
 Shape letters used in the comments:
     B   batch size
-    T   sequence length (time)
+    T   sequence length (time): with a KV cache, the new tokens only
+    S   positions the queries attend over: with a KV cache, the cached ones plus T, otherwise T
+    L   positions a KV cache has room for (max_len)
     D   model width (hidden_size)
     F   hidden width of the feed-forward network (intermediate_size)
     H   query heads (num_attention_heads)
@@ -91,6 +93,32 @@ class RMSNorm(nn.Module):
         return normed.to(x.dtype) * self.weight  # [..., dim]
 
 
+class KVCache:
+    """The keys and values of every position so far, for one attention layer. The buffers are
+    allocated once, for the longest sequence, and each step writes its new positions in place."""
+
+    def __init__(
+        self,
+        config: Qwen3Config,
+        batch_size: int,
+        max_len: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> None:
+        shape = (batch_size, max_len, config.num_key_value_heads, config.head_dim)
+        self.k = torch.zeros(shape, dtype=dtype, device=device)  # [B, L, G, Dh]
+        self.v = torch.zeros(shape, dtype=dtype, device=device)  # [B, L, G, Dh]
+        self.length = 0  # positions filled so far
+
+    def update(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:  # [B, T, G, Dh] each
+        """Store the keys and values of T new positions; return those of every position so far."""
+        start = self.length
+        self.length = start + k.size(1)
+        self.k[:, start : self.length] = k  # [B, T, G, Dh] written into [B, L, G, Dh]
+        self.v[:, start : self.length] = v  # [B, T, G, Dh] written into [B, L, G, Dh]
+        return self.k[:, : self.length], self.v[:, : self.length]  # [B, S, G, Dh] each
+
+
 class Attention(nn.Module):
     def __init__(self, config: Qwen3Config) -> None:
         super().__init__()
@@ -108,7 +136,9 @@ class Attention(nn.Module):
         self.k_norm = RMSNorm(self.head_dim, config.rms_norm_eps)
         self.o_proj = Linear(q_dim, config.hidden_size)
 
-    def forward(self, x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, D], [T, Dh/2]
+    def forward(
+        self, x: Tensor, freqs_cis: Tensor, cache: KVCache | None
+    ) -> Tensor:  # [B, T, D], [T, Dh/2]
         q = self.q_proj(x)  # [B, T, H*Dh]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
         q = self.q_norm(q)  # [B, T, H, Dh], each head's query normed on its own
@@ -122,17 +152,21 @@ class Attention(nn.Module):
         v = self.v_proj(x)  # [B, T, G*Dh]
         v = v.unflatten(-1, (self.num_kv_heads, self.head_dim))  # [B, T, G, Dh]
 
-        group_size = self.num_heads // self.num_kv_heads  # H/G
-        k = k.repeat_interleave(group_size, dim=2)  # [B, T, H, Dh], neighboring heads share one
-        v = v.repeat_interleave(group_size, dim=2)  # [B, T, H, Dh]
+        if cache is not None:
+            k, v = cache.update(k, v)  # [B, S, G, Dh] each, the cached positions then the new
 
-        causal = torch.ones(x.size(1), x.size(1), dtype=torch.bool, device=x.device)  # [T, T]
-        causal = causal.tril()  # [T, T], query t sees keys 0..t
-        scores = torch.einsum("bthd,bshd->bhts", q, k)  # [B, H, T, T]
-        scores = scores.float() * self.softmax_scale  # [B, H, T, T]
-        scores = scores.masked_fill(~causal, -torch.inf)  # [B, H, T, T]
-        probs = scores.softmax(dim=-1)  # [B, H, T, T]
-        probs = probs.to(v.dtype)  # [B, H, T, T]
+        group_size = self.num_heads // self.num_kv_heads  # H/G
+        k = k.repeat_interleave(group_size, dim=2)  # [B, S, H, Dh], neighboring heads share one
+        v = v.repeat_interleave(group_size, dim=2)  # [B, S, H, Dh]
+
+        cached = k.size(1) - q.size(1)  # positions before the new tokens, 0 without a cache
+        causal = torch.ones(q.size(1), k.size(1), dtype=torch.bool, device=x.device)  # [T, S]
+        causal = causal.tril(diagonal=cached)  # [T, S], new token t sees keys 0..cached+t
+        scores = torch.einsum("bthd,bshd->bhts", q, k)  # [B, H, T, S]
+        scores = scores.float() * self.softmax_scale  # [B, H, T, S]
+        scores = scores.masked_fill(~causal, -torch.inf)  # [B, H, T, S]
+        probs = scores.softmax(dim=-1)  # [B, H, T, S]
+        probs = probs.to(v.dtype)  # [B, H, T, S]
         o = torch.einsum("bhts,bshd->bthd", probs, v)  # [B, T, H, Dh]
         o = o.flatten(-2)  # [B, T, H*Dh]
         return self.o_proj(o)  # [B, T, D]
@@ -160,9 +194,11 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.mlp = FeedForward(config)
 
-    def forward(self, x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, D], [T, Dh/2]
+    def forward(
+        self, x: Tensor, freqs_cis: Tensor, cache: KVCache | None
+    ) -> Tensor:  # [B, T, D], [T, Dh/2]
         h = self.input_layernorm(x)  # [B, T, D]
-        h = self.self_attn(h, freqs_cis)  # [B, T, D]
+        h = self.self_attn(h, freqs_cis, cache)  # [B, T, D]
         x = x + h  # [B, T, D]
 
         h = self.post_attention_layernorm(x)  # [B, T, D]
@@ -173,19 +209,22 @@ class Block(nn.Module):
 class Qwen3(nn.Module):
     def __init__(self, config: Qwen3Config) -> None:
         super().__init__()
-        self.head_dim = config.head_dim
-        self.rope_theta = config.rope_theta
+        self.config = config
         self.embed_tokens = Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
-    def forward(self, ids: Tensor) -> Tensor:  # [B, T]
+    def forward(self, ids: Tensor, caches: list[KVCache] | None = None) -> Tensor:  # [B, T]
+        """With caches, one per layer, ids continue the sequence the caches hold."""
+        start = 0 if caches is None else caches[0].length  # position of the first token of ids
         freqs_cis = rope_freqs_cis(
-            self.head_dim, ids.size(1), self.rope_theta, ids.device
-        )  # [T, Dh/2] complex
+            self.config.head_dim, start + ids.size(1), self.config.rope_theta, ids.device
+        )  # [start+T, Dh/2] complex
+        freqs_cis = freqs_cis[start:]  # [T, Dh/2], the angles at the positions of ids
         x = self.embed_tokens(ids)  # [B, T, D]
-        for layer in self.layers:
-            x = layer(x, freqs_cis)  # [B, T, D]
+        for i, layer in enumerate(self.layers):
+            cache = None if caches is None else caches[i]
+            x = layer(x, freqs_cis, cache)  # [B, T, D]
         x = self.norm(x)  # [B, T, D]
         return F.linear(x, self.embed_tokens.weight)  # [B, T, V], the head is the embedding table
 
