@@ -345,6 +345,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "safetensors" },
+    { name = "tokenizers" },
     { name = "torch" },
     { name = "triton", marker = "sys_platform == 'linux'" },
 ]
@@ -364,6 +365,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "tokenizers", specifier = ">=0.23.3" },
     { name = "torch", specifier = ">=2.14.0" },
     { name = "triton", marker = "sys_platform == 'linux'", specifier = "==3.8.0" },
 ]
