@@ -8,7 +8,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 
 | # | Stage | Status |
 |---|---|---|
-| 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | Not started |
+| 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | In progress |
 | 1 | SFT | Not started |
 | 2 | LoRA, then QLoRA | Not started |
 | 3 | Rejection sampling | Not started |
