@@ -43,22 +43,36 @@ class Qwen3Config:
     rms_norm_eps: float  # added to the mean square before the square root
 
 
-def rope_freqs_cis(dim: int, seq_len: int, theta: float, device: torch.device) -> Tensor:
+def rope_cos_sin(
+    dim: int, start: int, seq_len: int, theta: float, device: torch.device
+) -> tuple[Tensor, Tensor]:
+    """The cos and sin of the RoPE angles at positions start to start + seq_len."""
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device) / dim))  # [Dh/2]
-    positions = torch.arange(seq_len, device=device)  # [T]
+    positions = torch.arange(start, start + seq_len, device=device)  # [T]
     angles = torch.outer(positions, freqs)  # [T, Dh/2]
-    return torch.polar(torch.ones_like(angles), angles)  # [T, Dh/2] complex
+    angles = torch.cat([angles, angles], dim=-1)  # [T, Dh], dims i and i + Dh/2 share an angle
+    return angles.cos(), angles.sin()  # [T, Dh] each
 
 
-def apply_rope(x: Tensor, freqs_cis: Tensor) -> Tensor:  # [B, T, H, Dh], [T, Dh/2]
-    """Rotate each pair of dims by its position's angle. Qwen3 pairs dim i with dim i + Dh/2: the
-    checkpoint was trained with this pairing, so it has to match. For keys, G heads instead of H."""
-    x32 = x.float()  # [B, T, H, Dh]
+def rotate_half(x: Tensor) -> Tensor:  # [..., Dh]
+    """Turn each pair of dims (a, b) = (x_i, x_i+Dh/2) a quarter turn, to (-b, a)."""
     half = x.size(-1) // 2
-    pairs = torch.complex(x32[..., :half], x32[..., half:])  # [B, T, H, Dh/2] complex
-    freqs_cis = freqs_cis.unsqueeze(1)  # [T, 1, Dh/2], every head turns the same way
-    rotated = pairs * freqs_cis  # [B, T, H, Dh/2] complex
-    rotated = torch.cat([rotated.real, rotated.imag], dim=-1)  # [B, T, H, Dh]
+    first = x[..., :half]  # [..., Dh/2], the a of every pair
+    second = x[..., half:]  # [..., Dh/2], the b of every pair
+    return torch.cat([-second, first], dim=-1)  # [..., Dh]
+
+
+def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:  # [B, T, H, Dh], [T, Dh] each
+    """Rotate each pair of dims by its position's angle. Qwen3 pairs dim i with dim i + Dh/2: the
+    checkpoint was trained with this pairing, so it has to match. For keys, G heads instead of H.
+    Turned by an angle, a pair (a, b) becomes (a cos - b sin, b cos + a sin): the pair times cos,
+    plus the pair turned a quarter turn, (-b, a), times sin. Real numbers only: torch.compile can't
+    generate code for complex ones."""
+    x32 = x.float()  # [B, T, H, Dh]
+    cos = cos.unsqueeze(1)  # [T, 1, Dh], every head turns the same way
+    sin = sin.unsqueeze(1)  # [T, 1, Dh]
+    turned = rotate_half(x32)  # [B, T, H, Dh]
+    rotated = x32 * cos + turned * sin  # [B, T, H, Dh]
     return rotated.to(x.dtype)  # [B, T, H, Dh]
 
 
@@ -149,18 +163,18 @@ class Attention(nn.Module):
         self.o_proj = Linear(q_dim, config.hidden_size)
 
     def forward(
-        self, x: Tensor, freqs_cis: Tensor, cache: KVCache | None
-    ) -> Tensor:  # [B, T, D], [T, Dh/2]
+        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None
+    ) -> Tensor:  # [B, T, D], [T, Dh], [T, Dh]
         q = self.q_proj(x)  # [B, T, H*Dh]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
         q = self.q_norm(q)  # [B, T, H, Dh], each head's query normed on its own
-        q = apply_rope(q, freqs_cis)  # [B, T, H, Dh]
+        q = apply_rope(q, cos, sin)  # [B, T, H, Dh]
         q = q.transpose(1, 2)  # [B, H, T, Dh], the layout attention kernels take
 
         k = self.k_proj(x)  # [B, T, G*Dh]
         k = k.unflatten(-1, (self.num_kv_heads, self.head_dim))  # [B, T, G, Dh]
         k = self.k_norm(k)  # [B, T, G, Dh]
-        k = apply_rope(k, freqs_cis)  # [B, T, G, Dh]
+        k = apply_rope(k, cos, sin)  # [B, T, G, Dh]
         k = k.transpose(1, 2)  # [B, G, T, Dh]
 
         v = self.v_proj(x)  # [B, T, G*Dh]
@@ -199,10 +213,10 @@ class Block(nn.Module):
         self.mlp = FeedForward(config)
 
     def forward(
-        self, x: Tensor, freqs_cis: Tensor, cache: KVCache | None
-    ) -> Tensor:  # [B, T, D], [T, Dh/2]
+        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None
+    ) -> Tensor:  # [B, T, D], [T, Dh], [T, Dh]
         h = self.input_layernorm(x)  # [B, T, D]
-        h = self.self_attn(h, freqs_cis, cache)  # [B, T, D]
+        h = self.self_attn(h, cos, sin, cache)  # [B, T, D]
         x = x + h  # [B, T, D]
 
         h = self.post_attention_layernorm(x)  # [B, T, D]
@@ -221,14 +235,13 @@ class Qwen3(nn.Module):
     def forward(self, ids: Tensor, caches: list[KVCache] | None = None) -> Tensor:  # [B, T]
         """With caches, one per layer, ids continue the sequence the caches hold."""
         start = 0 if caches is None else caches[0].length  # position of the first token of ids
-        freqs_cis = rope_freqs_cis(
-            self.config.head_dim, start + ids.size(1), self.config.rope_theta, ids.device
-        )  # [start+T, Dh/2] complex
-        freqs_cis = freqs_cis[start:]  # [T, Dh/2], the angles at the positions of ids
+        cos, sin = rope_cos_sin(
+            self.config.head_dim, start, ids.size(1), self.config.rope_theta, ids.device
+        )  # [T, Dh] each, at the positions of ids
         x = self.embed_tokens(ids)  # [B, T, D]
         for i, layer in enumerate(self.layers):
             cache = None if caches is None else caches[i]
-            x = layer(x, freqs_cis, cache)  # [B, T, D]
+            x = layer(x, cos, sin, cache)  # [B, T, D]
         x = self.norm(x)  # [B, T, D]
         return F.linear(x, self.embed_tokens.weight)  # [B, T, V], the head is the embedding table
 
