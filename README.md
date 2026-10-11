@@ -22,7 +22,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check_attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/generate.py` | generates text the simplest way, rerunning the whole sequence for every new token, and times each token |
-| `post/sampler.py` | generates a batch of samples with a KV cache: the prompt once, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
+| `post/sampler.py` | generates a batch of samples with a KV cache and a compiled model: the prompt once, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
 | `post/check_kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
 | `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
