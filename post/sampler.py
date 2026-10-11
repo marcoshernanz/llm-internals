@@ -3,6 +3,8 @@ Generate text with Qwen3 and a KV cache, for a batch of sequences at once. The p
 the model once (prefill), then each step feeds in only the newest token of every row (decode): its
 query attends over the keys and values that every earlier position of its row left in the cache.
 A row that writes the stop token is done, but stays in the batch until every row is.
+The model is compiled: torch.compile fuses the small steps between the matmuls into fewer kernels.
+Each new input shape compiles on its first call, so each batch size runs once untimed first.
 Run with ``uv run python -m post.sampler``: it times batches of 1 to 64 samples of one question,
 then prints 16 answers to it.
 
@@ -64,19 +66,25 @@ def generate(
 def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
+    model.compile(fullgraph=True)  # fullgraph: fail loudly if any part can't be compiled
     stop_id = tokenizer.token_to_id("<|endoftext|>")
     assert stop_id is not None
     prompt_ids = tokenizer.encode(PROMPT).ids
 
-    print(f"batch size: ms per decode step, new tokens per second ({NEW_TOKENS} steps)")
+    print(f"batch size: first run, then ms per step and tokens per second ({NEW_TOKENS} steps)")
     for batch_size in BATCH_SIZES:
         ids = torch.tensor([prompt_ids] * batch_size, device=DEVICE)  # [B, T]
-        generate(model, ids, 2, TEMPERATURE, stop_id)  # the first calls set up the GPU: not timed
+        start = time.perf_counter()
+        generate(model, ids, NEW_TOKENS, TEMPERATURE, stop_id)  # compiles new shapes: not timed
+        first_run = time.perf_counter() - start
         _, seconds = generate(model, ids, NEW_TOKENS, TEMPERATURE, stop_id)
         decode = seconds[1:]  # the first step is the prefill: the whole prompt of every row
         ms = 1000 * sum(decode) / len(decode)
         tokens_per_second = batch_size * len(decode) / sum(decode)
-        print(f"{batch_size:>4}: {ms:4.0f} ms, {tokens_per_second:5.0f} tokens per second")
+        print(
+            f"{batch_size:>4}: {first_run:4.1f} s, then {ms:4.0f} ms, "
+            f"{tokens_per_second:5.0f} tokens per second"
+        )
 
     torch.manual_seed(0)
     ids = torch.tensor([prompt_ids] * SAMPLES, device=DEVICE)  # [B, T]
