@@ -19,19 +19,21 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `gpu.py` | runs modules one after another on a cloud GPU (an NVIDIA L4 on Modal), where every run goes by default |
 | `kaggle_run.py` | runs modules one after another on a free Kaggle T4, for when the month's Modal credits run out |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
-| `post/qwen3.py` | Qwen3 in our own code, loading the released checkpoints from the Hugging Face Hub |
+| `post/qwen3.py` | Qwen3 in our own code: the model, its KV cache, and loading the released checkpoint and tokenizer from the Hugging Face Hub |
+| `post/sampler.py` | samples answers with a KV cache, several rows at once: the prompt read once and its cache copied into every row, then one token per row per step until a stop token |
+| `post/gsm8k.py` | GSM8K: the data, the 4-shot prompt and two graders (strict and last number) |
+| `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them |
+| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, in batches padded to their longest |
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check_attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
-| `post/generate.py` | generates text the simplest way, rerunning the whole sequence for every new token, and times each token |
-| `post/sampler.py` | samples a batch of answers to one prompt with a KV cache and a compiled model: the prompt read once and its cache copied into every row, then one token per row per step until a stop token; times batches of 1 to 64 and prints 16 answers |
 | `post/check_kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
 | `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own, with a prompt per row and with one prompt shared by every row |
-| `post/gsm8k.py` | GSM8K: the 4-shot prompt, two graders (strict and last number) and pass@k; scores the base model's greedy answers and pass@1 to pass@16 |
 | `post/check_gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
-| `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them; prints the base model's loss on one conversation, token by token |
-| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, in batches padded to their longest; the held-out loss and the probability of `<\|im_end\|>` before and after, then the test questions asked in chat format |
 | `post/check_chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
-| `post/chat_baseline.py` | asks the base model GSM8K questions zero-shot in Qwen's chat format: how its answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
+| `post/bench_generate.py` | times generation without a cache, rerunning the whole sequence per token, then the sampler at batches of 1 to 64; prints 16 sampled answers |
+| `post/eval_gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
+| `post/eval_chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
+| `post/eval_sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, the padding share, then the test questions asked in chat format |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
@@ -45,7 +47,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 Every run goes to a cloud GPU, an L4 on Modal. `gpu.py` copies the local code in, so uncommitted changes run too, and runs the modules one after another in one container. Each module's output streams back and is saved to `out/<module>.log`, with any files it writes to `out/`. The last line says what the run cost:
 
 ```bash
-uv run modal run gpu.py --modules post.check_kv_cache,post.gsm8k
+uv run modal run gpu.py --modules post.check_kv_cache,post.eval_gsm8k
 ```
 
 Modal gives $30 of credits a month, and the workspace stops at $25 of usage, so the card is never charged. To see what's spent:
@@ -57,7 +59,7 @@ uv run modal billing report --for "this month"
 When the month's credits run out, run on a free Kaggle T4 instead. Its logs come back to `out/kaggle/output/`. A T4 can't compute in bf16, so there the model runs in fp32:
 
 ```bash
-uv run python kaggle_run.py post.check_kv_cache post.gsm8k
+uv run python kaggle_run.py post.check_kv_cache post.eval_gsm8k
 ```
 
 Open profiler timelines in https://ui.perfetto.dev.
