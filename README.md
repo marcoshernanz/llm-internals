@@ -35,6 +35,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/eval/gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
 | `post/eval/chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, tokens read against padded batches, then the test questions asked in chat format |
+| `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
