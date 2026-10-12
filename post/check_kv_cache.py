@@ -2,7 +2,7 @@
 Check the KV cache: at every step, the logits from feeding in only the new token, with the cache,
 must match the logits from rerunning the whole sequence. The cached run asks for the last
 position's logits only, so that is checked too. Both in fp32, so any difference beyond rounding is
-a bug. Run with ``uv run python kaggle_run.py post.check_kv_cache``.
+a bug. Run with ``uv run modal run gpu.py --modules post.check_kv_cache``.
 """
 
 import torch
