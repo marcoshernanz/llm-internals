@@ -48,8 +48,8 @@ for name, text in SOURCES.items():
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
 subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"])
-versions = "import sys, torch; print('Python', sys.version.split()[0], 'PyTorch', torch.__version__)"
-subprocess.run([sys.executable, "-c", versions])
+print("Python", sys.version.split()[0])
+subprocess.run([sys.executable, "-c", "import torch; print('PyTorch', torch.__version__)"])
 
 env = dict(os.environ, CUDA_VISIBLE_DEVICES="0", HF_HUB_DISABLE_PROGRESS_BARS="1")
 failed = []
