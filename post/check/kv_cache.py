@@ -2,17 +2,17 @@
 Check the KV cache: at every step, the logits from feeding in only the new token, with the cache,
 must match the logits from rerunning the whole sequence. The cached run asks for the last
 position's logits only, so that is checked too. Both in fp32, so any difference beyond rounding is
-a bug. Run with ``uv run modal run gpu.py --modules post.check_kv_cache``.
+a bug. Run with ``uv run modal run gpu.py --modules post.check.kv_cache``.
 """
 
 import torch
 
-from post.bench_generate import PROMPT
+from post.bench.generate import PROMPT
 from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
 from post.sampler import new_caches
 
 STEPS = 50  # new tokens to check, each the likeliest one
-# Rounding moves the logits by about 1e-4, as in post/check_qwen3.py. One real bug, starting the
+# Rounding moves the logits by about 1e-4, as in post/check/qwen3.py. One real bug, starting the
 # new token's RoPE positions at 0 instead of at the cache's length, moves them by 20.
 TOLERANCE = 1e-3
 
