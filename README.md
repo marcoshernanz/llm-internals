@@ -16,8 +16,8 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/kernels/rmsnorm.py` | RMSNorm forward as one fused Triton kernel, the `autograd.Function` joining it to the backward, and `TritonRMSNorm`, the model's RMSNorm running both, which `use_triton_rmsnorm` swaps in |
 | `core/kernels/rmsnorm_backward.py` | RMSNorm backward as one Triton kernel, for the input and weight gradients |
 | `core/kernels/bench_rmsnorm.py` | checks both kernels and the tiny model with them swapped in against PyTorch, then times forward and backward |
-| `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
-| `kaggle_run.py` | runs modules one after another on a Kaggle T4: sends the local code, streams the log and pulls back each module's log |
+| `gpu.py` | runs modules one after another on a cloud GPU (an NVIDIA L4 on Modal), where every run goes by default |
+| `kaggle_run.py` | runs modules one after another on a free Kaggle T4, for when the month's Modal credits run out |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
 | `post/qwen3.py` | Qwen3 in our own code, loading the released checkpoints from the Hugging Face Hub |
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
@@ -38,25 +38,25 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 
 ## Running
 
-```bash
-uv run python -m core.train
-```
-
-To run on a GPU instead, pass the module to `gpu.py`. Local changes are copied in on every run:
+Every run goes to a cloud GPU, an L4 on Modal. `gpu.py` copies the local code in, so uncommitted changes run too, and runs the modules one after another in one container. Each module's output streams back and is saved to `out/<module>.log`, with any files it writes to `out/`. The last line says what the run cost:
 
 ```bash
-uv run modal run gpu.py --module core.train
+uv run modal run gpu.py --modules post.check_kv_cache,post.gsm8k
 ```
 
-Files a run writes to `out/` come back to the local `out/`. Open profiler timelines in https://ui.perfetto.dev.
+Modal gives $30 of credits a month, and the workspace stops at $25 of usage, so the card is never charged. To see what's spent:
 
-The post-training modules run on a Kaggle T4, several in one session. The log streams while they run, and each module's log comes back to `out/kaggle/output/`:
+```bash
+uv run modal billing report --for "this month"
+```
+
+When the month's credits run out, run on a free Kaggle T4 instead. Its logs come back to `out/kaggle/output/`. A T4 can't compute in bf16, so there the model runs in fp32:
 
 ```bash
 uv run python kaggle_run.py post.check_kv_cache post.gsm8k
 ```
 
-A T4 can't compute in bf16, so there the model runs in fp32.
+Open profiler timelines in https://ui.perfetto.dev.
 
 Triton runs only on Linux with an NVIDIA GPU, so kernels run through `gpu.py`. On macOS, install Triton's Python files so the editor and ty can read them. `uv sync` removes them again:
 
