@@ -1,5 +1,5 @@
 """Run modules of this repo on a Kaggle T4, one after another in one session.
-Run with ``uv run python kaggle_run.py post.check_kv_cache post.gsm8k``.
+Run with ``uv run python kaggle_run.py post.check_kv_cache post.eval_gsm8k``.
 
 A Kaggle kernel is a single script, so the local ``post`` and ``core`` sources, uncommitted changes
 included, are written into it; on Kaggle's machine it writes them back out as files and runs each
@@ -161,7 +161,7 @@ def main() -> None:
         follow(api)
         return
     modules = sys.argv[1:]
-    assert modules, "name at least one module, e.g. post.gsm8k"
+    assert modules, "name at least one module, e.g. post.eval_gsm8k"
     build(modules)
     pushed = api.kernels_push(str(KERNEL_DIR), timeout=str(TIMEOUT_SECONDS))
     assert not pushed.error, pushed.error
