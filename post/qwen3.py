@@ -132,6 +132,13 @@ class KVCache:
         self.v[:, :, start : self.length] = v  # [B, G, T, Dh] written into [B, G, L, Dh]
         return self.k[:, :, : self.length], self.v[:, :, : self.length]  # [B, G, S, Dh] each
 
+    def repeat_rows(self, batch_size: int) -> None:
+        """Copy a cache of one row into batch_size rows, so that samples of one prompt share its
+        keys and values without each recomputing them. Copies, not views: each row writes its own
+        new tokens after the prompt."""
+        self.k = self.k.repeat(batch_size, 1, 1, 1)  # [1, G, L, Dh] -> [B, G, L, Dh]
+        self.v = self.v.repeat(batch_size, 1, 1, 1)  # [1, G, L, Dh] -> [B, G, L, Dh]
+
 
 def attend(q: Tensor, k: Tensor, v: Tensor, scale: float) -> Tensor:  # [B, H, T, Dh], [B, G, S, Dh]
     """Causal attention of T new queries over S keys, the last T of which belong to the new tokens.
@@ -232,8 +239,12 @@ class Qwen3(nn.Module):
         self.layers = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
-    def forward(self, ids: Tensor, caches: list[KVCache] | None = None) -> Tensor:  # [B, T]
-        """With caches, one per layer, ids continue the sequence the caches hold."""
+    def forward(
+        self, ids: Tensor, caches: list[KVCache] | None = None, last_only: bool = False
+    ) -> Tensor:  # [B, T]
+        """With caches, one per layer, ids continue the sequence the caches hold. With last_only,
+        only the last position gets logits: it alone predicts the next token, and logits for every
+        position are big, a row of V = 151,936 numbers each."""
         start = 0 if caches is None else caches[0].length  # position of the first token of ids
         cos, sin = rope_cos_sin(
             self.config.head_dim, start, ids.size(1), self.config.rope_theta, ids.device
@@ -243,6 +254,8 @@ class Qwen3(nn.Module):
             cache = None if caches is None else caches[i]
             x = layer(x, cos, sin, cache)  # [B, T, D]
         x = self.norm(x)  # [B, T, D]
+        if last_only:
+            x = x[:, -1:]  # [B, 1, D], so T is 1 below
         return F.linear(x, self.embed_tokens.weight)  # [B, T, V], the head is the embedding table
 
 
