@@ -10,8 +10,8 @@ A chat model answers, then closes its turn with <|im_end|>. This measures what t
 greedy answers: how each answer ends, the first answer of each kind, and how many are right.
 Generation stops at <|im_end|> or <|endoftext|>, the two tokens Qwen's chat models stop at. Run on
 the base model, on the first 200 test questions, it is the baseline SFT starts from;
-post/eval_sft.py asks the fine-tuned model the same way.
-Run with ``uv run modal run gpu.py --modules post.eval_chat``.
+post/eval/sft.py asks the fine-tuned model the same way.
+Run with ``uv run modal run gpu.py --modules post.eval.chat``.
 
 Shape letters used in the comments:
     B   answers sampled at once (1: greedy)
@@ -25,7 +25,7 @@ import torch
 from tokenizers import Tokenizer
 
 from post.chat import render_prompt
-from post.eval_gsm8k import GREEDY_QUESTIONS, MAX_NEW_TOKENS
+from post.eval.gsm8k import GREEDY_QUESTIONS, MAX_NEW_TOKENS
 from post.gsm8k import last_number, load_gsm8k, reference_answer, strict_answer
 from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer, token_id
 from post.sampler import generate
@@ -94,7 +94,7 @@ def main() -> None:
     model = load_qwen3(REPO_ID, DTYPE, DEVICE)
     model.compile(fullgraph=True)
     test = load_gsm8k("test")
-    print("4-shot, the same questions: 57% right by last number (post/eval_gsm8k.py)")
+    print("4-shot, the same questions: 57% right by last number (post/eval/gsm8k.py)")
     ask(model, tokenizer, test[:GREEDY_QUESTIONS])
 
 
