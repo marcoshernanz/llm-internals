@@ -23,6 +23,7 @@ import time
 import torch
 from tokenizers import Tokenizer
 
+from post.chat import render_prompt
 from post.generate import DEVICE, DTYPE, REPO_ID
 from post.gsm8k import (
     GREEDY_QUESTIONS,
@@ -39,12 +40,6 @@ STOPS = ["<|im_end|>", "<|endoftext|>"]  # the end of a turn, the end of a docum
 # What can end an answer: a stop, or a new turn opened without closing the answer's own
 ENDINGS = [*STOPS, "<|im_start|>"]
 LIMIT = f"the {MAX_NEW_TOKENS}-token limit"  # the ending of an answer that wrote none of them
-
-
-def chat_prompt(question: str) -> str:
-    """The question as a user turn, then the assistant's turn opened. The same text Qwen's chat
-    template writes for one user message."""
-    return f"<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n"
 
 
 def token_id(tokenizer: Tokenizer, token: str) -> int:
@@ -78,8 +73,8 @@ def main() -> None:
     strict_right = 0
     last_right = 0
     for i, problem in enumerate(test[:GREEDY_QUESTIONS]):
-        prompt = chat_prompt(problem["question"])
-        ids = torch.tensor(tokenizer.encode(prompt).ids, device=DEVICE)  # [T]
+        prompt = render_prompt(tokenizer, [{"role": "user", "content": problem["question"]}])
+        ids = torch.tensor(prompt, device=DEVICE)  # [T]
         new_ids, _ = generate(model, ids, 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
         row = new_ids[0].tolist()  # N token ids
         answer_ids, ending = split_answer(row, endings)
