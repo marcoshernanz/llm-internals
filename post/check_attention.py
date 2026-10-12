@@ -3,7 +3,7 @@ Check the fused attention of post/qwen3.py against attention written out step by
 key-value head for the query heads that share it, score, mask, softmax, weight the values. In fp32,
 for the three ways the model calls it: the whole prompt with nothing cached, one new token over a
 cache, and several new tokens over a cache.
-Run with ``uv run python -m post.check_attention``.
+Run with ``uv run modal run gpu.py --modules post.check_attention``.
 
 Shape letters used in the comments:
     B   batch size
