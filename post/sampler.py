@@ -1,17 +1,22 @@
 """
-Generate text with Qwen3 and a KV cache, for a batch of sequences at once. The prompt goes through
-the model once (prefill), then each step feeds in only the newest token of every row (decode): its
-query attends over the keys and values that every earlier position of its row left in the cache.
+Sample several answers to one prompt with Qwen3 and a KV cache, a batch of rows at once. The prompt
+goes through the model once, at batch size 1 (prefill), and its keys and values are copied into
+every row. Then each step feeds in only the newest token of every row (decode): its query attends
+over the keys and values that every earlier position of its row left in the cache.
 A row that writes the stop token is done, but stays in the batch until every row is.
 The model is compiled: torch.compile fuses the small steps between the matmuls into fewer kernels.
 Each new input shape compiles on its first call, so each batch size runs once untimed first.
-Run with ``uv run python -m post.sampler``: it times batches of 1 to 64 samples of one question,
-then prints 16 answers to it.
+Run with ``uv run python kaggle_run.py post.sampler``: it times batches of 1 to 64 samples of one
+question, then prints 16 answers to it.
 
 Shape letters used in the comments:
     B   sequences sampled at once
-    T   sequence length, the prompt plus the tokens generated so far
+    T   prompt length
+    N   new tokens generated so far
     V   vocabulary size
+    G   key-value heads
+    L   positions a KV cache has room for
+    Dh  dims per head
 """
 
 import time
@@ -19,7 +24,7 @@ import time
 import torch
 from torch import Tensor
 
-from post.generate import DEVICE, PROMPT, REPO_ID, TEMPERATURE, sample
+from post.generate import DEVICE, DTYPE, PROMPT, REPO_ID, TEMPERATURE, sample
 from post.qwen3 import KVCache, Qwen3, load_qwen3, load_tokenizer
 
 BATCH_SIZES = [1, 4, 16, 64]  # rows of the timing table
@@ -38,47 +43,58 @@ def new_caches(model: Qwen3, batch_size: int, max_len: int) -> list[KVCache]:
 
 @torch.no_grad()
 def generate(
-    model: Qwen3, ids: Tensor, max_new_tokens: int, temperature: float, stop_id: int
-) -> tuple[Tensor, list[float]]:  # [B, T]
-    """Append up to max_new_tokens tokens to every row of ids. A row that writes stop_id is done:
-    it stays in the batch, so the shapes don't change, but every token after it is stop_id too.
-    Stop when every row is done. Also return the seconds each step took."""
-    caches = new_caches(model, batch_size=ids.size(0), max_len=ids.size(1) + max_new_tokens)
-    inputs = ids  # [B, T], what the model reads this step: the whole prompt first
-    done = torch.zeros(ids.size(0), dtype=torch.bool, device=ids.device)  # [B]
+    model: Qwen3,
+    prompt: Tensor,
+    samples: int,
+    max_new_tokens: int,
+    temperature: float,
+    stop_id: int,
+) -> tuple[Tensor, list[float]]:  # [T]
+    """Sample up to max_new_tokens tokens after the prompt, in samples rows. A row that writes
+    stop_id is done: it stays in the batch, so the shapes don't change, but every token after it is
+    stop_id too. Stop when every row is done. Return the new tokens of every row, and the seconds
+    each step took: the first step is the prefill."""
+    caches = new_caches(model, batch_size=1, max_len=prompt.size(0) + max_new_tokens)
+    start = time.perf_counter()
+    ids = prompt.unsqueeze(0)  # [1, T]
+    logits = model(ids, caches, last_only=True)  # [1, 1, V], the prompt read once
+    for cache in caches:
+        cache.repeat_rows(samples)  # [1, G, L, Dh] -> [B, G, L, Dh], the prompt in every row
+    logits = logits[:, -1]  # [1, V]
+    logits = logits.expand(samples, -1)  # [B, V], every row starts from the same prediction
+    done = torch.zeros(samples, dtype=torch.bool, device=prompt.device)  # [B]
+    new_ids = []  # one [B, 1] per step
     seconds = []
-    for _ in range(max_new_tokens):
-        start = time.perf_counter()
-        logits = model(inputs, caches)  # [B, T, V] for the prompt, then [B, 1, V]
-        logits = logits[:, -1]  # [B, V], only the last position predicts the next token
-        next_ids = sample(logits, temperature)  # [B, 1]
+    while True:
+        next_ids = sample(logits, temperature)  # [B, 1], each row draws its own
         next_ids = next_ids.masked_fill(done.unsqueeze(1), stop_id)  # [B, 1], done rows: stop_id
-        ids = torch.cat([ids, next_ids], dim=1)  # [B, T+1]
-        inputs = next_ids  # [B, 1], the next step reads only the new tokens
+        new_ids.append(next_ids)
         done = done | (next_ids.squeeze(1) == stop_id)  # [B]
         all_done = done.all().item()  # .item() waits for the GPU, so the timing is real
         seconds.append(time.perf_counter() - start)
-        if all_done:
+        if all_done or len(new_ids) == max_new_tokens:
             break
-    return ids, seconds  # [B, T + new tokens]
+        start = time.perf_counter()
+        logits = model(next_ids, caches)  # [B, 1, V], each row reads only its newest token
+        logits = logits[:, -1]  # [B, V]
+    return torch.cat(new_ids, dim=1), seconds  # [B, N]
 
 
 def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
-    model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
+    model = load_qwen3(REPO_ID, DTYPE, DEVICE)
     model.compile(fullgraph=True)  # fullgraph: fail loudly if any part can't be compiled
     stop_id = tokenizer.token_to_id("<|endoftext|>")
     assert stop_id is not None
-    prompt_ids = tokenizer.encode(PROMPT).ids
+    prompt = torch.tensor(tokenizer.encode(PROMPT).ids, device=DEVICE)  # [T]
 
     print(f"batch size: first run, then ms per step and tokens per second ({NEW_TOKENS} steps)")
     for batch_size in BATCH_SIZES:
-        ids = torch.tensor([prompt_ids] * batch_size, device=DEVICE)  # [B, T]
         start = time.perf_counter()
-        generate(model, ids, NEW_TOKENS, TEMPERATURE, stop_id)  # compiles new shapes: not timed
+        generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, stop_id)  # compiles: not timed
         first_run = time.perf_counter() - start
-        _, seconds = generate(model, ids, NEW_TOKENS, TEMPERATURE, stop_id)
-        decode = seconds[1:]  # the first step is the prefill: the whole prompt of every row
+        _, seconds = generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, stop_id)
+        decode = seconds[1:]  # the first step is the prefill: the whole prompt, once
         ms = 1000 * sum(decode) / len(decode)
         tokens_per_second = batch_size * len(decode) / sum(decode)
         print(
@@ -87,10 +103,9 @@ def main() -> None:
         )
 
     torch.manual_seed(0)
-    ids = torch.tensor([prompt_ids] * SAMPLES, device=DEVICE)  # [B, T]
-    ids, _ = generate(model, ids, NEW_TOKENS, TEMPERATURE, stop_id)  # [B, T + new tokens]
+    new_ids, _ = generate(model, prompt, SAMPLES, NEW_TOKENS, TEMPERATURE, stop_id)  # [B, N]
     print(f"\n{PROMPT}")
-    for i, row in enumerate(ids[:, len(prompt_ids) :].tolist()):
+    for i, row in enumerate(new_ids.tolist()):
         answer = tokenizer.decode(row)
         first_line = answer.strip().split("\n")[0]
         print(f"{i + 1:>2}: {first_line}")
