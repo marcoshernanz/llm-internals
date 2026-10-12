@@ -7,7 +7,7 @@ worked solutions as the answers; and the loss counts only the assistant's tokens
 It is a full fine-tune: every weight trains. The weights stay in fp32 while the matmuls run in
 bf16 (mixed precision): an update far smaller than a weight would vanish if the weight were bf16,
 which keeps only about 3 significant digits.
-Run with ``uv run modal run gpu.py --modules post.sft``. post/eval_sft.py measures what it changes.
+Run with ``uv run modal run gpu.py --modules post.sft``. post/eval/sft.py measures what it changes.
 
 Shape letters used in the comments:
     B   conversations per batch
