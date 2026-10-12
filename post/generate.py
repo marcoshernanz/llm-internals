@@ -2,7 +2,7 @@
 Generate text with Qwen3 the simplest way: run the whole sequence through the model, take the last
 position's logits, pick a token, append it, repeat. Every new token reruns the whole prefix, so
 each token costs more than the one before; the timing table at the end shows it.
-Run with ``uv run python kaggle_run.py post.generate``.
+Run with ``uv run modal run gpu.py --modules post.generate``.
 
 Shape letters used in the comments:
     B   sequences sampled at once (1 in this file's loop)
