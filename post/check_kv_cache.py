@@ -7,8 +7,8 @@ a bug. Run with ``uv run modal run gpu.py --modules post.check_kv_cache``.
 
 import torch
 
-from post.generate import DEVICE, PROMPT, REPO_ID
-from post.qwen3 import load_qwen3, load_tokenizer
+from post.bench_generate import PROMPT
+from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
 from post.sampler import new_caches
 
 STEPS = 50  # new tokens to check, each the likeliest one
