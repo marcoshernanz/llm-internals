@@ -77,7 +77,7 @@ RL on Qwen math improves scores even with *random* rewards, because RL surfaces 
 | Compute | ~3.7 TFLOPS, no matrix units | 65 TFLOPS fp16 per card | 121 TFLOPS bf16 | 989 TFLOPS bf16 |
 | Memory | ~12 GB usable by the GPU, 120 GB/s | 15 GB per card, 300 GB/s | 24 GB, 300 GB/s | 80 GB, 3.35 TB/s |
 | bf16 | yes | **no**, fp16 only | yes | yes |
-| Hours | unlimited | 30 h/week; a 2-card session uses one clock | ~20 h/month on $25 | – |
+| Hours | unlimited | 30 h/week; a 2-card session uses one clock | ~30 h/month on $25 | – |
 | 0.6B full SFT, est. | ~250–500 tok/s | ~2,600 tok/s | ~6,000 tok/s | ~50,000 tok/s |
 
 ### Memory decides the split
@@ -89,11 +89,11 @@ Full fine-tuning with AdamW keeps 16 bytes per parameter: 4 for the fp32 weights
 
 ### Mac: write the code
 
-Code, lint and type checks only. Every run goes to Kaggle: a 0.6B run on a 16 GB Mac swaps and leaves it unusable for anything else (the GSM8K baseline pushed 13 GB into swap).
+Code, lint and type checks only. Every run goes to a cloud GPU, Modal while the month's credits last, then Kaggle: a 0.6B run on a 16 GB Mac swaps and leaves it unusable for anything else (the GSM8K baseline pushed 13 GB into swap).
 
 - **PyTorch,** so the same code runs on the Mac's MPS and on CUDA unchanged. The alternative is MLX: faster on a Mac and with mature LoRA, but a second framework.
 
-### Kaggle: the workhorse for 0.6B
+### Kaggle: free, once the Modal credits run out
 
 About 120 free hours a month.
 
@@ -106,11 +106,14 @@ About 120 free hours a month.
 - **No FlashAttention.** PyTorch's attention falls back to its memory-efficient kernel.
 - **Launcher:** `kaggle_run.py`, like `gpu.py`, sends the local code to a T4, streams the log and pulls back the output.
 
-### Modal: only what a T4 can't do
+### Modal: the default while the credits last
 
-That means 1.7B runs, the 8B teacher (16 GB in bf16) and bf16 checks.
+$30 of credits a month. The workspace stops at $25 of usage, so the card is never charged: about 30 hours of L4.
 
-- **Cache weights in a Modal Volume.** They load at 1–3 GB/s there, against a few hundred MB/s from Hugging Face.
+- **An L4 by default,** the cheapest GPU there that computes in bf16, so the model runs as it was trained. A pricier GPU only for a lesson that needs one.
+- **One container per experiment.** `gpu.py` runs several modules in it, so the startup and the model download are paid once.
+- **A timeout on every run,** so a stuck run can't spend the month.
+- **Weights download on every run,** seconds for 0.6B. For the 8B teacher (16 GB), weigh the download time against keeping it in a Modal Volume at $0.09 per GB a month.
 - **Keep the idle timeout short:** idle containers are billed.
 
 ### Not used: GCP TPUs
@@ -119,8 +122,8 @@ TPUs need JAX or torch_xla, and RL's variable-length generation keeps forcing XL
 
 ### Budget, est.
 
-- **40–60 T4-hours across all stages.** Paired runs share a session's clock, so this is 1–2 weeks of Kaggle quota.
-- **$15–25 of Modal credit** for the 1.7B and teacher work.
+- **Modal first:** $25 of usage a month, about 30 L4-hours.
+- **Then Kaggle:** 30 T4-hours a week. The 40–60 T4-hours all stages need fit in 1–2 weeks of it, since paired runs share a session's clock.
 - **Stage 4 uses the most:** a GRPO step takes 1–3 minutes at 0.6B, and a run is 50–100 steps.
 
 ## Stages in detail
