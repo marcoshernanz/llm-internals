@@ -1,7 +1,7 @@
 """
 Check the chat format in post/chat.py on cases whose answers are known: the text it writes, the
 ids, which tokens the mask counts, and that a prompt matches what the checkpoint's own chat template
-writes. Only the tokenizer runs. Run with ``uv run python -m post.check_chat``.
+writes. Only the tokenizer runs. Run with ``uv run python -m post.check.chat``.
 """
 
 from transformers import AutoTokenizer
