@@ -8,7 +8,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 
 | # | Stage | Status |
 |---|---|---|
-| 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | In progress |
+| 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | Done |
 | 1 | SFT | Not started |
 | 2 | LoRA, then QLoRA | Not started |
 | 3 | Rejection sampling | Not started |
@@ -102,6 +102,7 @@ About 120 free hours a month.
   - **The 8B model in NF4 next to the student:** as stage 6's judge and as stage 7's teacher.
   - **Generation and training on separate cards** (stage 9).
 - **No bf16 on a T4.** Train in fp16 with fp32 master weights and loss scaling. This is a lesson in why the frontier moved to bf16.
+- **First thing on falling back:** check whether fp16 overflows anywhere in the model, i.e. whether any activation passes 65,504. Until then the T4 runs in fp32.
 - **Trap:** under fp16 an RL step can overflow and be skipped while the reward still logs normally, so log skipped steps.
 - **No FlashAttention.** PyTorch's attention falls back to its memory-efficient kernel.
 - **Launcher:** `kaggle_run.py`, like `gpu.py`, sends the local code to a T4, streams the log and pulls back the output.
@@ -137,16 +138,21 @@ Each stage starts from a problem we can see in the previous stage's output.
   - RL is mostly generation, and without a KV cache every new token recomputes the whole prefix.
 - **Build:**
   - Qwen3's forward pass in plain PyTorch, loading the Hugging Face safetensors. Check its logits against `transformers`.
-  - A batched sampler with a KV cache that also returns each token's log-prob, which RL needs.
-  - Graders (GSM8K answer extraction, IFEval-style constraint checks) and pass@k.
+  - A batched sampler with a KV cache.
+  - GSM8K graders (strict and last number) and pass@k.
 - **See:**
   - The base model answers, then keeps going: it writes the next "Question:" itself and never stops.
-  - Whether fp16 overflows anywhere on a T4.
-- **Runs on:** Kaggle.
+  - 4-shot GSM8K, greedy, first 200 test questions: 57% by last number, 47% strict. Qwen3's report: 59.6%.
+  - pass@k, 16 samples at temperature 1, first 50 questions: pass@1 35%, pass@16 84% by last number.
+- **Moved on:** per-token log-probs in the sampler to stage 4, IFEval-style graders to just before stage 4, the fp16 check to the first Kaggle run.
+- **Runs on:** Kaggle, then Modal.
 
 ### 1. SFT: teach it to take turns
 
-- **Problem:** the base model has no turn structure and doesn't stop.
+- **Problem:** the base model has no turn structure and doesn't stop. `post/chat_baseline.py` measures it on greedy answers to the first 200 GSM8K test questions, asked zero-shot in chat format:
+  - None of the 200 closes its turn with `<|im_end|>`. 88% run to the 256-token limit; 12% end the document with `<|endoftext|>`.
+  - Most begin by repeating the question.
+  - 6% are right by last number, against 57% 4-shot. The model can solve them, but nothing in this format draws it out.
 - **Build:**
   - Qwen's ChatML chat template.
   - Loss on assistant tokens only.
@@ -158,7 +164,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - It stops at `<|im_end|>`.
   - GSM8K accuracy, asked zero-shot in chat format.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
-- **Runs on:** Kaggle.
+- **Runs on:** Modal L4, in bf16.
 
 ### 2. LoRA, then QLoRA: make bigger models fit
 
@@ -185,7 +191,9 @@ Each stage starts from a problem we can see in the previous stage's output.
 ### 4. RL with verifiable rewards
 
 - **Problem:** rejection sampling throws away the wrong answers, which carry signal too.
+- **Before:** IFEval-style constraint graders, for the first task below.
 - **Build:**
+  - Per-token log-probs from the sampler: the policy-gradient loss needs them.
   - An environment interface of (problem, environment, verifier) triplets, as in DeepSeek V4.1.
   - REINFORCE first, then GRPO as DeepSeekMath wrote it: a group baseline, z-scored advantages, ratio clipping and a KL penalty.
   - Then six fixes, each added when its problem appears:
