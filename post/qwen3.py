@@ -27,6 +27,14 @@ from safetensors.torch import load_file
 from tokenizers import Tokenizer
 from torch import Tensor, nn
 
+REPO_ID = "Qwen/Qwen3-0.6B-Base"  # the checkpoint we post-train
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# The checkpoint's bf16, except on a GPU that can't compute in it, such as the T4. Its fp16 is fast,
+# but a bf16 value above 65,504 overflows fp16: until we check the model stays below that, fp32.
+DTYPE = torch.bfloat16
+if DEVICE == "cuda" and not torch.cuda.is_bf16_supported(including_emulation=False):
+    DTYPE = torch.float32
+
 
 @dataclass(frozen=True)
 class Qwen3Config:
@@ -280,3 +288,10 @@ def load_tokenizer(repo_id: str) -> Tokenizer:
     """The checkpoint's tokenizer, a byte-level BPE read from its tokenizer.json."""
     path = Path(snapshot_download(repo_id, allow_patterns=["tokenizer.json"]))
     return Tokenizer.from_file(str(path / "tokenizer.json"))
+
+
+def token_id(tokenizer: Tokenizer, token: str) -> int:
+    """The id of a special token, such as "<|endoftext|>"."""
+    found = tokenizer.token_to_id(token)
+    assert found is not None, token
+    return found
