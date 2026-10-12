@@ -55,6 +55,15 @@ def render_prompt(tokenizer: Tokenizer, messages: list[Message]) -> list[int]:
     return ids + tokenizer.encode("<|im_start|>assistant\n").ids
 
 
+def gsm8k_chat(problem: dict[str, str]) -> list[Message]:
+    """A GSM8K problem as a conversation: its question, then its worked solution, which ends with
+    "The answer is N."."""
+    return [
+        {"role": "user", "content": problem["question"]},
+        {"role": "assistant", "content": worked_solution(problem["answer"])},
+    ]
+
+
 def token_losses(model: Qwen3, ids: Tensor) -> Tensor:  # [B, T]
     """Each position's loss at predicting the next token: minus the log of the probability it gave
     the true one. Position t's target is token t+1, so the last token is never an input."""
@@ -81,11 +90,7 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, DTYPE, DEVICE)
     problem = load_gsm8k("test")[0]  # from the test split, which SFT won't train on
-    messages = [
-        {"role": "user", "content": problem["question"]},
-        {"role": "assistant", "content": worked_solution(problem["answer"])},
-    ]
-    ids, mask = render(tokenizer, messages)
+    ids, mask = render(tokenizer, gsm8k_chat(problem))
     ids_t = torch.tensor([ids], device=DEVICE)  # [1, T]
     mask_t = torch.tensor([mask], device=DEVICE)  # [1, T]
     losses = token_losses(model, ids_t)[0]  # [T-1]
