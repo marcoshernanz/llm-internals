@@ -1,20 +1,14 @@
 """
-Check the GSM8K tools of post/gsm8k.py where the right result is known: the few-shot example made
-from a reference answer, both graders on endings of answers the model really wrote, and pass@k
-against counting every way to pick k of the samples.
+Check the GSM8K tools where the right result is known: the few-shot example made from a reference
+answer and both graders of post/gsm8k.py, on endings of answers the model really wrote; and pass@k
+of post/eval_gsm8k.py, against counting every way to pick k of the samples.
 Run with ``uv run python -m post.check_gsm8k``.
 """
 
 from itertools import combinations
 
-from post.gsm8k import (
-    cut,
-    last_number,
-    pass_at_k,
-    reference_answer,
-    strict_answer,
-    worked_solution,
-)
+from post.eval_gsm8k import pass_at_k
+from post.gsm8k import cut, last_number, reference_answer, strict_answer, worked_solution
 
 # The first reference answer of the train split, as stored, and as the prompt shows it
 STORED = (
