@@ -157,7 +157,7 @@ Each stage starts from a problem we can see in the previous stage's output.
 - **Build:**
   - Qwen's ChatML chat template.
   - Loss on assistant tokens only.
-  - Several conversations packed per sequence, with no attention across them.
+  - Several conversations packed per sequence, with no attention across them (done, below).
   - A full fine-tune.
 - **Problem we'll hit:** the logits for 8k tokens × a 152k vocab are 4.6 GiB in fp32, so the loss is computed in chunks.
 - **Data:** `smol-smoltalk` (built for models under 1B), plus GSM8K as chats.
@@ -168,6 +168,11 @@ Each stage starts from a problem we can see in the previous stage's output.
   - 94% close their turn with `<|im_end|>`, against 0% for the base model; its probability where answers end went from 1.3e-6 to 0.91.
   - 40% right, against 6%. 4-shot, the base model gets 57%.
   - 28% of the tokens read were padding.
+- **Packing** (done): conversations laid end to end, up to 1,024 tokens per step, with FlashAttention's varlen kernel keeping attention within each one (`torch.nn.attention.varlen`).
+  - Without the mask, attention crosses into the conversations before (`post/check/packing.py`). The logits move by up to 29, and the second conversation's answer loss falls from 1.74 to 0.53: it reads the problem before it as a worked example, which inference never gives it. With the mask, they match up to bf16 rounding (0.7).
+  - Positions restart at 0 in each conversation, as in Hugging Face's padding-free path and Megatron; torchtitan keeps counting. With RoPE a score depends only on how far apart two tokens are, so this changes nothing beyond rounding.
+  - Run on the same 1,600 conversations: 0% padding, 259,881 tokens read instead of 358,576. 279 steps of about 930 tokens instead of 400 of 4 conversations: 1.3 minutes instead of 2, peak memory 11.7 GiB instead of 14.8.
+  - All 50 answers close their turn (94% before), 44% right (40%). The probability of `<|im_end|>` reaches 0.75, not 0.91: fewer, larger steps at the same learning rate.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
 - **Runs on:** Modal L4, in bf16.
 
