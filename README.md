@@ -23,11 +23,12 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check_attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/generate.py` | generates text the simplest way, rerunning the whole sequence for every new token, and times each token |
-| `post/sampler.py` | samples a batch of answers to one prompt with a KV cache and a compiled model: the prompt read once and its cache copied into every row, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
+| `post/sampler.py` | samples a batch of answers to one prompt with a KV cache and a compiled model: the prompt read once and its cache copied into every row, then one token per row per step until a stop token; times batches of 1 to 64 and prints 16 answers |
 | `post/check_kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
 | `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own, with a prompt per row and with one prompt shared by every row |
 | `post/gsm8k.py` | GSM8K: the 4-shot prompt, two graders (strict and last number) and pass@k; scores the base model's greedy answers and pass@1 to pass@16 |
 | `post/check_gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
+| `post/chat_baseline.py` | asks the base model GSM8K questions zero-shot in Qwen's chat format: how its answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
