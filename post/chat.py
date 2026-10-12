@@ -25,7 +25,7 @@ from tokenizers import Tokenizer
 from torch import Tensor
 
 from post.gsm8k import worked_solution
-from post.qwen3 import Qwen3
+from post.qwen3 import Packing, Qwen3
 
 Message = dict[str, str]  # {"role": "user", "content": "..."}; the roles: system, user, assistant
 IGNORE = -100  # a target the loss skips: cross_entropy leaves it out of the sum and of the count
@@ -60,13 +60,16 @@ def gsm8k_chat(problem: dict[str, str]) -> list[Message]:
     ]
 
 
-def sft_loss(model: Qwen3, ids: Tensor, mask: Tensor) -> Tensor:  # [B, T], [B, T]
+def sft_loss(
+    model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing | None = None
+) -> Tensor:  # [B, T], [B, T]
     """Pre-training's loss, the mean of minus the log probability of each true next token, over
-    only the targets the mask counts. Position t's target is token t+1."""
-    inputs = ids[:, :-1]  # [B, T-1]
+    only the targets the mask counts. Position t's target is token t+1. In a packed row, the last
+    token of one conversation would predict the first of the next: a header, never counted."""
     targets = ids[:, 1:]  # [B, T-1]
     targets = targets.masked_fill(~mask[:, 1:], IGNORE)  # [B, T-1], only the assistant's count
-    logits = model(inputs)  # [B, T-1, V]
+    logits = model(ids, packing=packing)  # [B, T, V]
+    logits = logits[:, :-1]  # [B, T-1, V], the last token has no target
     logits = logits.flatten(0, 1)  # [B*(T-1), V], one row per prediction
     targets = targets.flatten()  # [B*(T-1)]
     return F.cross_entropy(logits.float(), targets, ignore_index=IGNORE)
