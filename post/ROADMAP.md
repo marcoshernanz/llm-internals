@@ -177,6 +177,13 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Only 2 close their turn, both right after a made-up GSM8K ending: "The capital of France is Paris. The answer is 1455." It learned that a turn ends after "The answer is N.", not after an answer.
   - 4 end the document with `<|endoftext|>`, as the base model does. 2 run to the token limit, one repeating "I'm doing well, thank you. How about you?".
   - What they say is mostly sound (sleep tips, black holes, an email): that came from pre-training. What's missing is when to stop.
+- **Mixed with smol-smoltalk** (done): the same 1,600 GSM8K conversations plus 600 from smol-smoltalk's first train file, shuffled together.
+  - Steps of up to 2,048 tokens: its conversations average 865 tokens, GSM8K's 162. The 5 longer than a step are left out; toolkits such as TRL and open-instruct cut them to length instead.
+  - 2,195 conversations and 2,956 answers, about half from each set. 720K tokens, 36% of them GSM8K's.
+  - Everyday prompts: 7 of 8 close their turn, and none writes "The answer is". The eighth was still mid-answer at the 160-token limit. The Spanish is now "Buenos días, mi amigo", where GSM8K alone wrote "Buenos mañana" and then "The answer is 1.".
+  - GSM8K, first 50 test questions: 98% close their turn. 44% right by strict, the same as with GSM8K alone; 46% by last number. Where held-out answers end, `<|im_end|>` gets 0.90 (0.75 before); the held-out loss is 0.575 (0.569).
+  - The mistakes left are the model's own, from pre-training: bacteria "generally smaller than viruses", and three sentences where two were asked for.
+  - 420 steps, 3.2 minutes, 3,765 tokens per second (3,212 with 1,024-token steps). PyTorch's peak allocation was 15.7 GiB, yet twice the GPU ran out: about 21 GiB of the L4's 22 was held by PyTorch's cache. The blocks cached from earlier steps were the wrong size for this step's 1.2 GB of fp32 logits. It emptied the cache and carried on. That's the next problem.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
 - **Runs on:** Modal L4, in bf16.
 
