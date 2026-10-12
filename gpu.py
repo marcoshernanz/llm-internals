@@ -1,5 +1,5 @@
 """Run modules of this repo on a cloud GPU, an NVIDIA L4 on Modal, one after another in one
-container. Run with ``uv run modal run gpu.py --modules post.check_kv_cache,post.gsm8k``.
+container. Run with ``uv run modal run gpu.py --modules post.check_kv_cache,post.eval_gsm8k``.
 
 The local ``core`` and ``post`` packages are copied in on every run, so uncommitted changes run too,
 on the versions in uv.lock. Each module runs in its own process, so one module's compiled code or
