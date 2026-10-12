@@ -7,9 +7,8 @@ Run with ``uv run modal run gpu.py --modules post.check_qwen3``.
 import torch
 from transformers import AutoModelForCausalLM
 
-from post.qwen3 import load_qwen3
+from post.qwen3 import REPO_ID, load_qwen3
 
-REPO_ID = "Qwen/Qwen3-0.6B-Base"
 SHAPE = (2, 64)  # [B, T]
 # Logits reach about 20. Adding the same numbers in another order moves them by up to 1e-4:
 # transformers' own two attention paths (eager and sdpa) differ by 7e-5. One real bug, RoPE pairing
