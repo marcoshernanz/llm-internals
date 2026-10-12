@@ -1,5 +1,5 @@
 """Run modules of this repo on a cloud GPU, an NVIDIA L4 on Modal, one after another in one
-container. Run with ``uv run modal run gpu.py --modules post.check_kv_cache,post.eval_gsm8k``.
+container. Run with ``uv run modal run gpu.py --modules post.check.kv_cache,post.eval.gsm8k``.
 
 The local ``core`` and ``post`` packages are copied in on every run, so uncommitted changes run too,
 on the versions in uv.lock. Each module runs in its own process, so one module's compiled code or
@@ -22,7 +22,7 @@ TIMEOUT_SECONDS = 60 * 60  # stops a stuck run before it costs more than $0.80
 OUT_DIR = Path("out")
 
 image = modal.Image.debian_slim(python_version="3.14")
-image = image.uv_sync()  # uv.lock's versions, dev group too: post.check_qwen3 needs transformers
+image = image.uv_sync()  # uv.lock's versions, dev group too: post.check.qwen3 needs transformers
 image = image.env({"HF_HUB_DISABLE_PROGRESS_BARS": "1"})
 image = image.add_local_python_source("core", "post")
 app = modal.App("deepseek-v4-1-flash", image=image)
