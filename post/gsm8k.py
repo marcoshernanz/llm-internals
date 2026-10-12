@@ -5,8 +5,9 @@ it four solved problems from the train split, each ending in "The answer is N.",
 question. Its answer is cut at the next "Question:" it writes, then graded two ways: strict, the
 number after "The answer is", and last number, the last number anywhere in the answer. pass@k is
 the chance that at least one of k samples is right.
-Run with ``uv run python kaggle_run.py post.gsm8k``: it grades greedy answers to the first 200 test
-questions, then 16 samples at temperature 1 for each of the first 50, for pass@1 to pass@16.
+Run with ``uv run modal run gpu.py --modules post.gsm8k``: it grades greedy answers to the first
+200 test questions, then 16 samples at temperature 1 for each of the first 50, for pass@1 to
+pass@16.
 
 Shape letters used in the comments:
     B   answers sampled at once
@@ -133,9 +134,7 @@ def main() -> None:
             )
     print(f"({(time.perf_counter() - start) / 60:.0f} minutes; Qwen3 report: 59.6% on all 1,319)")
 
-    print(
-        f"\n{SAMPLES} samples at temperature {TEMPERATURE} each, first {SAMPLED_QUESTIONS} questions"
-    )
+    print(f"\n{SAMPLES} samples at temperature {TEMPERATURE}, first {SAMPLED_QUESTIONS} questions")
     start = time.perf_counter()
     last_pass = [0.0] * len(KS)  # summed over questions
     strict_pass = [0.0] * len(KS)
