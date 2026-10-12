@@ -3,7 +3,7 @@ Sample several answers to one prompt with Qwen3 and a KV cache, a batch of rows 
 goes through the model once, at batch size 1 (prefill), and its keys and values are copied into
 every row. Then each step feeds in only the newest token of every row (decode): its query attends
 over the keys and values that every earlier position of its row left in the cache.
-A row that writes the stop token is done, but stays in the batch until every row is.
+A row that writes a stop token is done, but stays in the batch until every row is.
 The model is compiled: torch.compile fuses the small steps between the matmuls into fewer kernels.
 Each new input shape compiles on its first call, so each batch size runs once untimed first.
 Run with ``uv run modal run gpu.py --modules post.sampler``: it times batches of 1 to 64 samples
@@ -13,6 +13,7 @@ Shape letters used in the comments:
     B   sequences sampled at once
     T   prompt length
     N   new tokens generated so far
+    S   stop tokens
     V   vocabulary size
     G   key-value heads
     L   positions a KV cache has room for
@@ -48,12 +49,13 @@ def generate(
     samples: int,
     max_new_tokens: int,
     temperature: float,
-    stop_id: int,
+    stop_ids: list[int],
 ) -> tuple[Tensor, list[float]]:  # [T]
-    """Sample up to max_new_tokens tokens after the prompt, in samples rows. A row that writes
-    stop_id is done: it stays in the batch, so the shapes don't change, but every token after it is
-    stop_id too. Stop when every row is done. Return the new tokens of every row, and the seconds
-    each step took: the first step is the prefill."""
+    """Sample up to max_new_tokens tokens after the prompt, in samples rows. A row that writes one
+    of stop_ids is done: it stays in the batch, so the shapes don't change, but every token after it
+    is the first of stop_ids. Stop when every row is done. Return the new tokens of every row, and
+    the seconds each step took: the first step is the prefill."""
+    stops = torch.tensor(stop_ids, device=prompt.device)  # [S]
     caches = new_caches(model, batch_size=1, max_len=prompt.size(0) + max_new_tokens)
     start = time.perf_counter()
     ids = prompt.unsqueeze(0)  # [1, T]
@@ -67,9 +69,9 @@ def generate(
     seconds = []
     while True:
         next_ids = sample(logits, temperature)  # [B, 1], each row draws its own
-        next_ids = next_ids.masked_fill(done.unsqueeze(1), stop_id)  # [B, 1], done rows: stop_id
+        next_ids = next_ids.masked_fill(done.unsqueeze(1), stop_ids[0])  # [B, 1], done: a stop
         new_ids.append(next_ids)
-        done = done | (next_ids.squeeze(1) == stop_id)  # [B]
+        done = done | torch.isin(next_ids.squeeze(1), stops)  # [B], wrote any of the stop ids
         all_done = done.all().item()  # .item() waits for the GPU, so the timing is real
         seconds.append(time.perf_counter() - start)
         if all_done or len(new_ids) == max_new_tokens:
@@ -91,9 +93,9 @@ def main() -> None:
     print(f"batch size: first run, then ms per step and tokens per second ({NEW_TOKENS} steps)")
     for batch_size in BATCH_SIZES:
         start = time.perf_counter()
-        generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, stop_id)  # compiles: not timed
+        generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])  # compiles: untimed
         first_run = time.perf_counter() - start
-        _, seconds = generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, stop_id)
+        _, seconds = generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])
         decode = seconds[1:]  # the first step is the prefill: the whole prompt, once
         ms = 1000 * sum(decode) / len(decode)
         tokens_per_second = batch_size * len(decode) / sum(decode)
@@ -103,7 +105,7 @@ def main() -> None:
         )
 
     torch.manual_seed(0)
-    new_ids, _ = generate(model, prompt, SAMPLES, NEW_TOKENS, TEMPERATURE, stop_id)  # [B, N]
+    new_ids, _ = generate(model, prompt, SAMPLES, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
     print(f"\n{PROMPT}")
     for i, row in enumerate(new_ids.tolist()):
         answer = tokenizer.decode(row)
