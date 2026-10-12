@@ -19,21 +19,22 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `gpu.py` | runs modules one after another on a cloud GPU (an NVIDIA L4 on Modal), where every run goes by default |
 | `kaggle_run.py` | runs modules one after another on a free Kaggle T4, for when the month's Modal credits run out |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
-| `post/qwen3.py` | Qwen3 in our own code: the model, its KV cache, and loading the released checkpoint and tokenizer from the Hugging Face Hub |
+| `post/qwen3.py` | Qwen3 in our own code: the model, its KV cache, attention within each conversation of a packed row, and loading the released checkpoint and tokenizer from the Hugging Face Hub |
 | `post/sampler.py` | samples answers with a KV cache, several rows at once: the prompt read once and its cache copied into every row, then one token per row per step until a stop token |
 | `post/gsm8k.py` | GSM8K: the data, the 4-shot prompt and two graders (strict and last number) |
 | `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them |
-| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, in batches padded to their longest |
+| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, packed end to end into steps of up to 1,024 tokens with no padding |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
 | `post/check/batch.py` | checks each row of a batch gets the same logits as that row on its own, with a prompt per row and with one prompt shared by every row |
 | `post/check/gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
 | `post/check/chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
+| `post/check/packing.py` | checks each conversation in a packed row gets the same logits as on its own, and shows what plain causal attention does instead |
 | `post/bench/generate.py` | times generation without a cache, rerunning the whole sequence per token, then the sampler at batches of 1 to 64; prints 16 sampled answers |
 | `post/eval/gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
 | `post/eval/chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
-| `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, the padding share, then the test questions asked in chat format |
+| `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, tokens read against padded batches, then the test questions asked in chat format |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
