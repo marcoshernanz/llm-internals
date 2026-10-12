@@ -153,6 +153,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - None of the 200 closes its turn with `<|im_end|>`. 88% run to the 256-token limit; 12% end the document with `<|endoftext|>`.
   - Most begin by repeating the question.
   - 6% are right by last number, against 57% 4-shot. The model can solve them, but nothing in this format draws it out.
+  - Where a held-out answer ends (`post/chat.py`), the base model gives `<|im_end|>` a probability of 3.2e-7 and `<|endoftext|>` 0.93. It knows how to end a document, not a turn.
 - **Build:**
   - Qwen's ChatML chat template.
   - Loss on assistant tokens only.
