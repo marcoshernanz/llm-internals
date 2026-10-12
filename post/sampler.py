@@ -6,8 +6,8 @@ over the keys and values that every earlier position of its row left in the cach
 A row that writes the stop token is done, but stays in the batch until every row is.
 The model is compiled: torch.compile fuses the small steps between the matmuls into fewer kernels.
 Each new input shape compiles on its first call, so each batch size runs once untimed first.
-Run with ``uv run python kaggle_run.py post.sampler``: it times batches of 1 to 64 samples of one
-question, then prints 16 answers to it.
+Run with ``uv run modal run gpu.py --modules post.sampler``: it times batches of 1 to 64 samples
+of one question, then prints 16 answers to it.
 
 Shape letters used in the comments:
     B   sequences sampled at once
