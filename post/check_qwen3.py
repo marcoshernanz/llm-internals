@@ -1,7 +1,7 @@
 """
 Check post/qwen3.py against the transformers implementation of Qwen3: same checkpoint, same input,
 same logits. Both run in fp32 on the CPU, so any difference beyond rounding is a bug in ours.
-Run with ``uv run python -m post.check_qwen3``.
+Run with ``uv run modal run gpu.py --modules post.check_qwen3``.
 """
 
 import torch
