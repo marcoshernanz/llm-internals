@@ -17,8 +17,7 @@ Shape letters used in the comments:
 import torch
 from torch import Tensor
 
-from post.generate import DEVICE
-from post.qwen3 import attend
+from post.qwen3 import DEVICE, attend
 
 B, H, G, DH = 2, 16, 8, 128  # Qwen3-0.6B's heads
 CASES = {"prompt, nothing cached": (32, 32), "one new token": (1, 40), "8 new tokens": (8, 40)}
