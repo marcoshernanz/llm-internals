@@ -2,7 +2,7 @@
 Check the Triton RMSNorm against the model's RMSNorm: the forward's output and saved 1 / RMS, the
 backward's input and weight gradients, and every gradient of the tiny model with the kernels swapped
 in. Then time the forward and the backward.
-Run with ``modal run gpu.py --module core.kernels.bench_rmsnorm``.
+Run with ``uv run modal run gpu.py --modules core.kernels.bench_rmsnorm``.
 
 The timed input is a bf16 activation of 8 x 4096 tokens, 8192 wide: 537 MB. The forward has to read
 it once and write an output of the same size once, so a plain copy of it is the fastest possible.
