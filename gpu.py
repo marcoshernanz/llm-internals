@@ -1,36 +1,62 @@
-"""Run one module of this repo on a cloud GPU. Run with ``modal run gpu.py --module core.bench``.
+"""Run modules of this repo on a cloud GPU, an NVIDIA L4 on Modal, one after another in one
+container. Run with ``uv run modal run gpu.py --modules post.check_kv_cache,post.gsm8k``.
 
-The local ``core`` package is copied in on every run, so uncommitted changes run too. Files the
-module writes to ``out/`` are copied back to the local ``out/``.
+The local ``core`` and ``post`` packages are copied in on every run, so uncommitted changes run too,
+on the versions in uv.lock. Each module runs in its own process, so one module's compiled code or
+memory doesn't carry into the next. Its output streams here and is saved to ``out/<module>.log``;
+files a module writes to ``out/`` come back to the local ``out/`` too. One container for all the
+modules pays the startup and the model download once. At the end it prints what the run cost.
 """
 
-import runpy
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import modal
 
-GPU = "L4"
-TIMEOUT_SECONDS = 10 * 60  # longer than Modal's 5-minute default, still stops a stuck run
+GPU = "L4"  # the cheapest GPU on Modal that computes in bf16
+DOLLARS_PER_HOUR = 0.80  # the L4's rate; CPU and memory add about 1%
+TIMEOUT_SECONDS = 60 * 60  # stops a stuck run before it costs more than $0.80
 OUT_DIR = Path("out")
 
 image = modal.Image.debian_slim(python_version="3.14")
-# the versions in uv.lock
-image = image.uv_pip_install("torch==2.14.0", "numpy==2.5.3", "triton==3.8.0")
-image = image.add_local_python_source("core")
+image = image.uv_sync()  # uv.lock's versions, dev group too: post.check_qwen3 needs transformers
+image = image.env({"HF_HUB_DISABLE_PROGRESS_BARS": "1"})
+image = image.add_local_python_source("core", "post")
 app = modal.App("deepseek-v4-1-flash", image=image)
 
 
 @app.function(gpu=GPU, timeout=TIMEOUT_SECONDS)
-def run(module: str) -> dict[str, bytes]:
-    runpy.run_module(module, run_name="__main__")
+def run(modules: list[str]) -> dict[str, bytes]:
+    OUT_DIR.mkdir(exist_ok=True)
+    for module in modules:
+        print(f"\n$ python -m {module}", flush=True)
+        start = time.time()
+        with open(OUT_DIR / f"{module}.log", "w") as log:
+            process = subprocess.Popen(
+                [sys.executable, "-u", "-m", module],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                log.write(line)
+        code = process.wait()
+        print(f"({module}: exit code {code}, {(time.time() - start) / 60:.1f} minutes)", flush=True)
     return {path.name: path.read_bytes() for path in OUT_DIR.glob("*")}
 
 
 @app.local_entrypoint()
-def main(module: str) -> None:
-    files = run.remote(module)
+def main(modules: str) -> None:
+    start = time.time()
+    files = run.remote(modules.split(","))
+    hours = (time.time() - start) / 3600  # from the request: a little more than was billed
     OUT_DIR.mkdir(exist_ok=True)
     for name, data in files.items():
         path = OUT_DIR / name
         path.write_bytes(data)
         print(f"saved {path}")
+    print(f"{hours * 60:.1f} minutes on an {GPU}, about ${hours * DOLLARS_PER_HOUR:.2f}")
