@@ -5,7 +5,8 @@ The local ``core`` and ``post`` packages are copied in on every run, so uncommit
 on the versions in uv.lock. Each module runs in its own process, so one module's compiled code or
 memory doesn't carry into the next. Its output streams here and is saved to ``out/<module>.log``;
 files a module writes to ``out/`` come back to the local ``out/`` too. One container for all the
-modules pays the startup and the model download once. At the end it prints what the run cost.
+modules pays the startup and the model download once. At the end it prints how long it waited
+for a GPU, how long it ran, and what that cost: Modal bills the running time only.
 """
 
 import subprocess
@@ -28,7 +29,9 @@ app = modal.App("deepseek-v4-1-flash", image=image)
 
 
 @app.function(gpu=GPU, timeout=TIMEOUT_SECONDS)
-def run(modules: list[str]) -> dict[str, bytes]:
+def run(modules: list[str]) -> tuple[dict[str, bytes], float]:
+    """Run the modules; return the files in out/ and the seconds this took."""
+    started = time.time()
     OUT_DIR.mkdir(exist_ok=True)
     for module in modules:
         print(f"\n$ python -m {module}", flush=True)
@@ -46,17 +49,20 @@ def run(modules: list[str]) -> dict[str, bytes]:
                 log.write(line)
         code = process.wait()
         print(f"({module}: exit code {code}, {(time.time() - start) / 60:.1f} minutes)", flush=True)
-    return {path.name: path.read_bytes() for path in OUT_DIR.glob("*")}
+    files = {path.name: path.read_bytes() for path in OUT_DIR.glob("*")}
+    return files, time.time() - started
 
 
 @app.local_entrypoint()
 def main(modules: str) -> None:
     start = time.time()
-    files = run.remote(modules.split(","))
-    hours = (time.time() - start) / 3600  # from the request: a little more than was billed
+    files, seconds = run.remote(modules.split(","))
+    waited = time.time() - start - seconds  # for a free GPU, the container to start, the transfer
+    hours = seconds / 3600  # the time billed, apart from the container's start
     OUT_DIR.mkdir(exist_ok=True)
     for name, data in files.items():
         path = OUT_DIR / name
         path.write_bytes(data)
         print(f"saved {path}")
-    print(f"{hours * 60:.1f} minutes on an {GPU}, about ${hours * DOLLARS_PER_HOUR:.2f}")
+    print(f"waited {waited / 60:.1f} minutes, then ran {hours * 60:.1f} minutes on an {GPU}")
+    print(f"about ${hours * DOLLARS_PER_HOUR:.2f}")
