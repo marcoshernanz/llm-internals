@@ -3,7 +3,7 @@ Check batching: each row of a batch must get the same logits as that row run on 
 cached step. Two batches: rows with different prompts, read together; and rows sharing one prompt,
 read once and copied into every row, as the sampler does. After the prompt every row reads different
 random tokens, so a row that leaked into another would show. All in fp32, so any difference beyond
-rounding is a bug. Run with ``uv run modal run gpu.py --modules post.check_batch``.
+rounding is a bug. Run with ``uv run modal run gpu.py --modules post.check.batch``.
 
 Shape letters used in the comments:
     B   rows of the batch
@@ -22,7 +22,7 @@ from post.sampler import new_caches
 
 SHAPE = (4, 32)  # [B, T], the batch and its prompt length
 STEPS = 16  # cached steps after the prompt
-# Rounding moves the logits by about 1e-4, as in post/check_qwen3.py. One real bug, each row
+# Rounding moves the logits by about 1e-4, as in post/check/qwen3.py. One real bug, each row
 # attending over its neighbor's cached keys and values, moves them by 17.
 TOLERANCE = 1e-3
 
