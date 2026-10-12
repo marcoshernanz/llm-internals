@@ -13,6 +13,7 @@ Shape letters used in the comments:
     G   key-value heads (num_key_value_heads), each shared by H/G query heads
     Dh  dims per head (head_dim)
     V   vocabulary size (vocab_size)
+    N   conversations packed in one row
 """
 
 import dataclasses
@@ -26,6 +27,7 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 from tokenizers import Tokenizer
 from torch import Tensor, nn
+from torch.nn.attention.varlen import varlen_attn
 
 REPO_ID = "Qwen/Qwen3-0.6B-Base"  # the checkpoint we post-train
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -51,12 +53,9 @@ class Qwen3Config:
     rms_norm_eps: float  # added to the mean square before the square root
 
 
-def rope_cos_sin(
-    dim: int, start: int, seq_len: int, theta: float, device: torch.device
-) -> tuple[Tensor, Tensor]:
-    """The cos and sin of the RoPE angles at positions start to start + seq_len."""
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device) / dim))  # [Dh/2]
-    positions = torch.arange(start, start + seq_len, device=device)  # [T]
+def rope_cos_sin(dim: int, positions: Tensor, theta: float) -> tuple[Tensor, Tensor]:  # [T]
+    """The cos and sin of the RoPE angles at the given positions."""
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=positions.device) / dim))  # [Dh/2]
     angles = torch.outer(positions, freqs)  # [T, Dh/2]
     angles = torch.cat([angles, angles], dim=-1)  # [T, Dh], dims i and i + Dh/2 share an angle
     return angles.cos(), angles.sin()  # [T, Dh] each
@@ -148,6 +147,18 @@ class KVCache:
         self.v = self.v.repeat(batch_size, 1, 1, 1)  # [1, G, L, Dh] -> [B, G, L, Dh]
 
 
+class Packing:
+    """Where each conversation of a packed row starts and ends: several conversations laid end to
+    end in one row of T tokens, with no padding, lengths[i] tokens each."""
+
+    def __init__(self, lengths: list[int], device: str) -> None:
+        offsets = torch.tensor([0, *lengths]).cumsum(0)  # [N+1]: 0, then where each one ends
+        self.offsets = offsets.to(device=device, dtype=torch.int32)  # [N+1], cu_seqlens
+        self.longest = max(lengths)
+        positions = [torch.arange(n) for n in lengths]  # N of [n], each conversation from 0
+        self.positions = torch.cat(positions).to(device)  # [T], as each would have alone
+
+
 def attend(q: Tensor, k: Tensor, v: Tensor, scale: float) -> Tensor:  # [B, H, T, Dh], [B, G, S, Dh]
     """Causal attention of T new queries over S keys, the last T of which belong to the new tokens.
     One fused kernel: each query head reads its group's key-value head where it lies, with no
@@ -158,6 +169,39 @@ def attend(q: Tensor, k: Tensor, v: Tensor, scale: float) -> Tensor:  # [B, H, T
     return F.scaled_dot_product_attention(
         q, k, v, attn_mask=causal, scale=scale, enable_gqa=True
     )  # [B, H, T, Dh]
+
+
+def attend_packed(
+    q: Tensor, k: Tensor, v: Tensor, packing: Packing, scale: float
+) -> Tensor:  # [1, H, T, Dh], [1, G, T, Dh], [1, G, T, Dh]
+    """Causal attention within each conversation of one packed row: a token sees the earlier tokens
+    of its own conversation only. One FlashAttention kernel for variable-length sequences reads
+    where each conversation starts and never computes a score between two of them. It takes bf16
+    only, and autocast doesn't reach it: the queries and keys leave their RMSNorms in the weights'
+    fp32, so they are cast to the values' dtype, the one the matmuls compute in."""
+    q = q.squeeze(0)  # [H, T, Dh], the one row
+    q = q.transpose(0, 1)  # [T, H, Dh], the layout varlen kernels take
+    q = q.to(v.dtype)  # [T, H, Dh]
+    k = k.squeeze(0)  # [G, T, Dh]
+    k = k.transpose(0, 1)  # [T, G, Dh]
+    k = k.to(v.dtype)  # [T, G, Dh]
+    v = v.squeeze(0)  # [G, T, Dh]
+    v = v.transpose(0, 1)  # [T, G, Dh]
+    o = varlen_attn(
+        q,
+        k,
+        v,
+        cu_seq_q=packing.offsets,  # [N+1], where each conversation starts, then T
+        cu_seq_k=packing.offsets,  # the same: queries and keys are the same tokens
+        max_q=packing.longest,
+        max_k=packing.longest,
+        scale=scale,
+        window_size=(-1, 0),  # causal: every earlier token of its conversation, no later one
+        enable_gqa=True,
+    )  # [T, H, Dh]
+    assert isinstance(o, Tensor)  # the output alone: no log-sum-exp was asked for
+    o = o.transpose(0, 1)  # [H, T, Dh]
+    return o.unsqueeze(0)  # [1, H, T, Dh]
 
 
 class Attention(nn.Module):
@@ -178,7 +222,7 @@ class Attention(nn.Module):
         self.o_proj = Linear(q_dim, config.hidden_size)
 
     def forward(
-        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None
+        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None, packing: Packing | None
     ) -> Tensor:  # [B, T, D], [T, Dh], [T, Dh]
         q = self.q_proj(x)  # [B, T, H*Dh]
         q = q.unflatten(-1, (self.num_heads, self.head_dim))  # [B, T, H, Dh]
@@ -199,7 +243,10 @@ class Attention(nn.Module):
         if cache is not None:
             k, v = cache.update(k, v)  # [B, G, S, Dh] each, the cached positions then the new
 
-        o = attend(q, k, v, self.softmax_scale)  # [B, H, T, Dh]
+        if packing is None:
+            o = attend(q, k, v, self.softmax_scale)  # [B, H, T, Dh]
+        else:
+            o = attend_packed(q, k, v, packing, self.softmax_scale)  # [1, H, T, Dh]
         o = o.transpose(1, 2)  # [B, T, H, Dh]
         o = o.flatten(-2)  # [B, T, H*Dh]
         return self.o_proj(o)  # [B, T, D]
@@ -228,10 +275,10 @@ class Block(nn.Module):
         self.mlp = FeedForward(config)
 
     def forward(
-        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None
+        self, x: Tensor, cos: Tensor, sin: Tensor, cache: KVCache | None, packing: Packing | None
     ) -> Tensor:  # [B, T, D], [T, Dh], [T, Dh]
         h = self.input_layernorm(x)  # [B, T, D]
-        h = self.self_attn(h, cos, sin, cache)  # [B, T, D]
+        h = self.self_attn(h, cos, sin, cache, packing)  # [B, T, D]
         x = x + h  # [B, T, D]
 
         h = self.post_attention_layernorm(x)  # [B, T, D]
@@ -248,19 +295,26 @@ class Qwen3(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
     def forward(
-        self, ids: Tensor, caches: list[KVCache] | None = None, last_only: bool = False
+        self,
+        ids: Tensor,
+        caches: list[KVCache] | None = None,
+        last_only: bool = False,
+        packing: Packing | None = None,
     ) -> Tensor:  # [B, T]
         """With caches, one per layer, ids continue the sequence the caches hold. With last_only,
         only the last position gets logits: it alone predicts the next token, and logits for every
-        position are big, a row of V = 151,936 numbers each."""
-        start = 0 if caches is None else caches[0].length  # position of the first token of ids
-        cos, sin = rope_cos_sin(
-            self.config.head_dim, start, ids.size(1), self.config.rope_theta, ids.device
-        )  # [T, Dh] each, at the positions of ids
+        position are big, a row of V = 151,936 numbers each. With packing, ids is one row of
+        conversations laid end to end, and each is computed as if it were alone."""
+        if packing is None:
+            start = 0 if caches is None else caches[0].length  # position of the first token of ids
+            positions = torch.arange(start, start + ids.size(1), device=ids.device)  # [T]
+        else:
+            positions = packing.positions  # [T], each conversation from 0
+        cos, sin = rope_cos_sin(self.config.head_dim, positions, self.config.rope_theta)  # [T, Dh]
         x = self.embed_tokens(ids)  # [B, T, D]
         for i, layer in enumerate(self.layers):
             cache = None if caches is None else caches[i]
-            x = layer(x, cos, sin, cache)  # [B, T, D]
+            x = layer(x, cos, sin, cache, packing)  # [B, T, D]
         x = self.norm(x)  # [B, T, D]
         if last_only:
             x = x[:, -1:]  # [B, 1, D], so T is 1 below
