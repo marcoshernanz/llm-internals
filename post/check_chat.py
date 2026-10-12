@@ -7,8 +7,7 @@ writes. Only the tokenizer runs. Run with ``uv run python -m post.check_chat``.
 from transformers import AutoTokenizer
 
 from post.chat import Message, render, render_prompt
-from post.generate import REPO_ID
-from post.qwen3 import load_tokenizer
+from post.qwen3 import REPO_ID, load_tokenizer
 
 CONVERSATION: list[Message] = [
     {"role": "system", "content": "You are a helpful assistant."},
