@@ -2,7 +2,7 @@
 Generate text with Qwen3 the simplest way: run the whole sequence through the model, take the last
 position's logits, pick a token, append it, repeat. Every new token reruns the whole prefix, so
 each token costs more than the one before; the timing table at the end shows it.
-Run with ``uv run python -m post.generate``.
+Run with ``uv run python kaggle_run.py post.generate``.
 
 Shape letters used in the comments:
     B   sequences sampled at once (1 in this file's loop)
@@ -18,7 +18,17 @@ from torch import Tensor
 from post.qwen3 import Qwen3, load_qwen3, load_tokenizer
 
 REPO_ID = "Qwen/Qwen3-0.6B-Base"
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
+# The checkpoint's bf16, except on a GPU that can't compute in it, such as the T4. Its fp16 is fast,
+# but a bf16 value above 65,504 overflows fp16: until we check the model stays below that, fp32.
+DTYPE = torch.bfloat16
+if DEVICE == "cuda" and not torch.cuda.is_bf16_supported(including_emulation=False):
+    DTYPE = torch.float32
 # The first question of GSM8K's test set, in the "Question: ... Answer:" format of few-shot prompts
 PROMPT = (
     "Question: Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and "
@@ -71,7 +81,7 @@ def print_timing(prompt_length: int, seconds: list[float]) -> None:
 
 def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
-    model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
+    model = load_qwen3(REPO_ID, DTYPE, DEVICE)
     stop_id = tokenizer.token_to_id("<|endoftext|>")
     assert stop_id is not None
     prompt_ids = tokenizer.encode(PROMPT).ids
