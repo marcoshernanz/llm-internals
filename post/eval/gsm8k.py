@@ -2,7 +2,7 @@
 Score the base model on GSM8K, 4-shot (post/gsm8k.py): greedy answers to the first 200 test
 questions, then 16 samples at temperature 1 for each of the first 50, for pass@1 to pass@16. pass@k
 is the chance that at least one of k samples is right.
-Run with ``uv run modal run gpu.py --modules post.eval_gsm8k``.
+Run with ``uv run modal run gpu.py --modules post.eval.gsm8k``.
 
 Shape letters used in the comments:
     B   answers sampled at once
