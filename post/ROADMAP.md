@@ -87,12 +87,11 @@ Full fine-tuning with AdamW keeps 16 bytes per parameter: 4 for the fp32 weights
 - **0.6B:** 9.6 GB, which fits a T4.
 - **1.7B:** 27 GB, which fits neither a T4 nor an L4. Even split across both T4s, 13.5 GB a card leaves no room for activations. Stage 2 solves this.
 
-### Mac: write and debug every loop
+### Mac: write the code
 
-Every loop runs here first, with 0.6B on 8–64 examples.
+Code, lint and type checks only. Every run goes to Kaggle: a 0.6B run on a 16 GB Mac swaps and leaves it unusable for anything else (the GSM8K baseline pushed 13 GB into swap).
 
-- **PyTorch on MPS,** so the same code runs on CUDA unchanged. The alternative is MLX: faster on a Mac and with mature LoRA, but a second framework.
-- **Trap:** MPS caches a graph for every new tensor shape. Pad batches to a few fixed lengths.
+- **PyTorch,** so the same code runs on the Mac's MPS and on CUDA unchanged. The alternative is MLX: faster on a Mac and with mature LoRA, but a second framework.
 
 ### Kaggle: the workhorse for 0.6B
 
@@ -105,7 +104,7 @@ About 120 free hours a month.
 - **No bf16 on a T4.** Train in fp16 with fp32 master weights and loss scaling. This is a lesson in why the frontier moved to bf16.
 - **Trap:** under fp16 an RL step can overflow and be skipped while the reward still logs normally, so log skipped steps.
 - **No FlashAttention.** PyTorch's attention falls back to its memory-efficient kernel.
-- **Launcher:** `kaggle.py`, like `gpu.py`, pushes a script through Kaggle's command-line tool and pulls back its output.
+- **Launcher:** `kaggle_run.py`, like `gpu.py`, sends the local code to a T4, streams the log and pulls back the output.
 
 ### Modal: only what a T4 can't do
 
@@ -140,7 +139,7 @@ Each stage starts from a problem we can see in the previous stage's output.
 - **See:**
   - The base model answers, then keeps going: it writes the next "Question:" itself and never stops.
   - Whether fp16 overflows anywhere on a T4.
-- **Runs on:** Mac, plus one short Kaggle session.
+- **Runs on:** Kaggle.
 
 ### 1. SFT: teach it to take turns
 
