@@ -1,8 +1,8 @@
 """
 Run SFT (post/sft.py) and measure what it changes. Before and after training: the loss on held-out
 conversations, GSM8K test problems, and the probability the model gives <|im_end|> where their
-answers end; then the first of them token by token. Of training: how long it took, how much of what
-the model read was padding, and the peak memory. After: the same test questions asked zero-shot in
+answers end; then the first of them token by token. Of training: how long it took, how many tokens
+it read against padded batches, and the peak memory. After: the same test questions asked zero-shot in
 chat format, as post/eval/chat.py asks the base model.
 Run with ``uv run modal run gpu.py --modules post.eval.sft``.
 
@@ -21,11 +21,12 @@ from tokenizers import Tokenizer
 from post.chat import gsm8k_chat, render
 from post.eval.chat import ask
 from post.gsm8k import load_gsm8k
-from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer, token_id
-from post.sft import BATCH_SIZE, STEPS, Chat, load_chats, train
+from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
+from post.sft import TOKENS_PER_STEP, Chat, load_chats, pack, train
 
 HELD_OUT = 50  # the first test problems: the loss on them before and after, then asked
 SHOWN = 6  # targets printed from each end of an answer
+PADDED_BATCH = 4  # conversations per batch in the first run, padded to the longest
 
 
 @torch.no_grad()
@@ -77,18 +78,18 @@ def report(model: Qwen3, tokenizer: Tokenizer, held: list[Chat]) -> None:
 
 
 def token_shares(chats: list[Chat]) -> int:
-    """Print how the tokens SFT read split into padding, prompt and answer; return how many."""
-    read = 0  # tokens the model read, padding included
-    real = 0  # of them, the conversations' own tokens
-    counted = 0  # of those, the ones the loss counts
-    for step in range(STEPS):
-        batch = chats[step * BATCH_SIZE : (step + 1) * BATCH_SIZE]
-        read += max(len(ids) for ids, _ in batch) * len(batch)  # each padded to the longest
-        real += sum(len(ids) for ids, _ in batch)
-        counted += sum(sum(mask) for _, mask in batch)
+    """Print how the tokens SFT read split into prompt and answer, against what padding batches of
+    4 conversations to their longest would read, as the first run did; return how many."""
+    read = sum(len(ids) for ids, _ in chats)  # every token read is a conversation's own
+    counted = sum(sum(mask) for _, mask in chats)  # of them, the ones the loss counts
+    batches = [chats[i : i + PADDED_BATCH] for i in range(0, len(chats), PADDED_BATCH)]
+    padded = sum(max(len(ids) for ids, _ in batch) * len(batch) for batch in batches)
     print(
-        f"of the {read:,} tokens read: {1 - real / read:.0%} padding, "
-        f"{(real - counted) / read:.0%} prompt, {counted / read:.0%} answer (counted)"
+        f"{len(pack(chats))} steps, {read:,} tokens read: 0% padding, "
+        f"{(read - counted) / read:.0%} prompt, {counted / read:.0%} answer (counted)"
+    )
+    print(
+        f"padded in batches of {PADDED_BATCH}: {padded:,} tokens read, {1 - read / padded:.0%} padding"
     )
     return read
 
@@ -97,7 +98,6 @@ def main() -> None:
     assert DEVICE == "cuda" and DTYPE == torch.bfloat16, "SFT computes in bf16: run it on the L4"
     torch.manual_seed(0)  # as post/sft.py: the same conversations in the same order
     tokenizer = load_tokenizer(REPO_ID)
-    pad_id = token_id(tokenizer, "<|endoftext|>")
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)
     chats = load_chats(tokenizer)
     test = load_gsm8k("test")[:HELD_OUT]
@@ -106,9 +106,9 @@ def main() -> None:
     print("before SFT:")
     report(model, tokenizer, held)
 
-    print(f"\nSFT, {STEPS} steps of {BATCH_SIZE} conversations:")
+    print(f"\nSFT, {len(chats)} conversations packed into steps of up to {TOKENS_PER_STEP} tokens:")
     start = time.perf_counter()
-    train(model, chats, pad_id)
+    train(model, chats)
     seconds = time.perf_counter() - start
     read = token_shares(chats)
     print(f"{seconds / 60:.1f} minutes, {read / seconds:,.0f} tokens per second")
