@@ -164,6 +164,10 @@ Each stage starts from a problem we can see in the previous stage's output.
 - **Check:**
   - It stops at `<|im_end|>`.
   - GSM8K accuracy, asked zero-shot in chat format.
+- **First run** (`post/sft.py`, 400 steps of 4 GSM8K chats, 2 minutes on the L4), on the first 50 test questions:
+  - 94% close their turn with `<|im_end|>`, against 0% for the base model; its probability where answers end went from 1.3e-6 to 0.91.
+  - 40% right, against 6%. 4-shot, the base model gets 57%.
+  - 28% of the tokens read were padding.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
 - **Runs on:** Modal L4, in bf16.
 
