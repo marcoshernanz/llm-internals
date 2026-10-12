@@ -173,6 +173,10 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Positions restart at 0 in each conversation, as in Hugging Face's padding-free path and Megatron; torchtitan keeps counting. With RoPE a score depends only on how far apart two tokens are, so this changes nothing beyond rounding.
   - Run on the same 1,600 conversations: 0% padding, 259,881 tokens read instead of 358,576. 279 steps of about 930 tokens instead of 400 of 4 conversations: 1.3 minutes instead of 2, peak memory 11.7 GiB instead of 14.8.
   - All 50 answers close their turn (94% before), 44% right (40%). The probability of `<|im_end|>` reaches 0.75, not 0.91: fewer, larger steps at the same learning rate.
+- **GSM8K alone is too narrow** (`post/eval/prompts.py`, 8 everyday prompts, none of them math, after the packed run):
+  - Only 2 close their turn, both right after a made-up GSM8K ending: "The capital of France is Paris. The answer is 1455." It learned that a turn ends after "The answer is N.", not after an answer.
+  - 4 end the document with `<|endoftext|>`, as the base model does. 2 run to the token limit, one repeating "I'm doing well, thank you. How about you?".
+  - What they say is mostly sound (sleep tips, black holes, an email): that came from pre-training. What's missing is when to stop.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
 - **Runs on:** Modal L4, in bf16.
 
