@@ -23,7 +23,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/sampler.py` | samples answers with a KV cache, several rows at once: the prompt read once and its cache copied into every row, then one token per row per step until a stop token |
 | `post/gsm8k.py` | GSM8K: the data, the 4-shot prompt and two graders (strict and last number) |
 | `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them |
-| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, packed end to end into steps of up to 1,024 tokens with no padding |
+| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems mixed with everyday smol-smoltalk conversations, packed end to end into steps of up to 2,048 tokens with no padding |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
@@ -35,7 +35,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/eval/gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
 | `post/eval/chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, tokens read against padded batches, then the test questions asked in chat format |
-| `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, and how many end the GSM8K way |
+| `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
