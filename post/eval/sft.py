@@ -3,8 +3,8 @@ Run SFT (post/sft.py) and measure what it changes. Before and after training: th
 conversations, GSM8K test problems, and the probability the model gives <|im_end|> where their
 answers end; then the first of them token by token. Of training: how long it took, how much of what
 the model read was padding, and the peak memory. After: the same test questions asked zero-shot in
-chat format, as post/eval_chat.py asks the base model.
-Run with ``uv run modal run gpu.py --modules post.eval_sft``.
+chat format, as post/eval/chat.py asks the base model.
+Run with ``uv run modal run gpu.py --modules post.eval.sft``.
 
 Shape letters used in the comments:
     T   tokens in a conversation
@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from tokenizers import Tokenizer
 
 from post.chat import gsm8k_chat, render
-from post.eval_chat import ask
+from post.eval.chat import ask
 from post.gsm8k import load_gsm8k
 from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer, token_id
 from post.sft import BATCH_SIZE, STEPS, Chat, load_chats, train
@@ -118,7 +118,7 @@ def main() -> None:
     report(model, tokenizer, held)
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
-    print("\nthe base model on these questions (post/eval_chat.py): closed its turn 0%, right 6%")
+    print("\nthe base model on these questions (post/eval/chat.py): closed its turn 0%, right 6%")
     ask(model, tokenizer, test)
 
 
