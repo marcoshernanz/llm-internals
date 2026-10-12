@@ -17,14 +17,17 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `core/kernels/rmsnorm_backward.py` | RMSNorm backward as one Triton kernel, for the input and weight gradients |
 | `core/kernels/bench_rmsnorm.py` | checks both kernels and the tiny model with them swapped in against PyTorch, then times forward and backward |
 | `gpu.py` | runs one module on a cloud GPU (an NVIDIA L4 on Modal) |
+| `kaggle_run.py` | runs modules one after another on a Kaggle T4: sends the local code, streams the log and pulls back each module's log |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
 | `post/qwen3.py` | Qwen3 in our own code, loading the released checkpoints from the Hugging Face Hub |
 | `post/check_qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check_attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/generate.py` | generates text the simplest way, rerunning the whole sequence for every new token, and times each token |
-| `post/sampler.py` | generates a batch of samples with a KV cache and a compiled model: the prompt once, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
+| `post/sampler.py` | samples a batch of answers to one prompt with a KV cache and a compiled model: the prompt read once and its cache copied into every row, then one token per row per step; times batches of 1 to 64 and prints 16 answers |
 | `post/check_kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
-| `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own |
+| `post/check_batch.py` | checks each row of a batch gets the same logits as that row on its own, with a prompt per row and with one prompt shared by every row |
+| `post/gsm8k.py` | GSM8K: the 4-shot prompt, two graders (strict and last number) and pass@k; scores the base model's greedy answers and pass@1 to pass@16 |
+| `post/check_gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
 ## The model
@@ -46,6 +49,14 @@ uv run modal run gpu.py --module core.train
 ```
 
 Files a run writes to `out/` come back to the local `out/`. Open profiler timelines in https://ui.perfetto.dev.
+
+The post-training modules run on a Kaggle T4, several in one session. The log streams while they run, and each module's log comes back to `out/kaggle/output/`:
+
+```bash
+uv run python kaggle_run.py post.check_kv_cache post.gsm8k
+```
+
+A T4 can't compute in bf16, so there the model runs in fp32.
 
 Triton runs only on Linux with an NVIDIA GPU, so kernels run through `gpu.py`. On macOS, install Triton's Python files so the editor and ty can read them. `uv sync` removes them again:
 
