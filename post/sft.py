@@ -2,8 +2,10 @@
 Supervised fine-tuning (SFT): teach the base model to take turns. The training step is
 pre-training's: whole conversations go through the model at once, each position predicting the
 next token from the true tokens before it, and one optimizer step follows each batch. Two things
-differ: the data are conversations in Qwen's chat format, here GSM8K's train problems with their
-worked solutions as the answers; and the loss counts only the assistant's tokens (post/chat.py).
+differ: the data are conversations in Qwen's chat format; and the loss counts only the assistant's
+tokens (post/chat.py). The conversations are GSM8K's train problems with their worked solutions,
+mixed with everyday ones from smol-smoltalk: chat, writing, code, summaries, one to several turns.
+Trained on GSM8K alone, the model ended every answer the GSM8K way (post/eval/prompts.py).
 It is a full fine-tune: every weight trains. The weights stay in fp32 while the matmuls run in
 bf16 (mixed precision): an update far smaller than a weight would vanish if the weight were bf16,
 which keeps only about 3 significant digits.
@@ -16,6 +18,7 @@ Shape letters used in the comments:
 """
 
 import torch
+from datasets import load_dataset
 from tokenizers import Tokenizer
 from torch import Tensor
 
@@ -23,10 +26,12 @@ from post.chat import gsm8k_chat, render, sft_loss
 from post.gsm8k import load_gsm8k
 from post.qwen3 import DEVICE, REPO_ID, Packing, Qwen3, load_qwen3, load_tokenizer
 
-CONVERSATIONS = 1_600  # of GSM8K's 7,473 train conversations, 162 tokens long on average
-TOKENS_PER_STEP = 1_024  # at most: about 6 conversations, never one split across two steps
+GSM8K = 1_600  # of GSM8K's 7,473 train problems, 162 tokens long on average
+SMOLTALK = 600  # of the 115,086 conversations in smol-smoltalk's first train file, 865 on average
+SMOLTALK_FILE = "data/train-00000-of-00004.parquet"  # the first of four: 230 MB, not 920
+TOKENS_PER_STEP = 2_048  # at most, never one conversation split; 1% of smol-smoltalk's are longer
 LEARNING_RATE = 1e-5  # the peak
-WARMUP_STEPS = 8  # 3% of the steps, rising to the peak; then a straight line down to 0
+WARMUP_STEPS = 13  # 3% of the 420 steps, rising to the peak; then a straight line down to 0
 MAX_GRAD_NORM = 1.0  # a step's gradient is scaled down to this length if longer
 LOG_EVERY = 25  # steps
 
@@ -34,10 +39,17 @@ Chat = tuple[list[int], list[bool]]  # a conversation's token ids, and which one
 
 
 def load_chats(tokenizer: Tokenizer) -> list[Chat]:
-    """The train problems SFT reads, shuffled, as conversations."""
-    train = load_gsm8k("train")
-    order = torch.randperm(len(train)).tolist()
-    return [render(tokenizer, gsm8k_chat(train[i])) for i in order[:CONVERSATIONS]]
+    """The conversations SFT reads, shuffled together: GSM8K's, then smol-smoltalk's, leaving out
+    any longer than a step."""
+    gsm8k = load_gsm8k("train")
+    order = torch.randperm(len(gsm8k)).tolist()
+    chats = [render(tokenizer, gsm8k_chat(gsm8k[i])) for i in order[:GSM8K]]
+    smoltalk = load_dataset("HuggingFaceTB/smol-smoltalk", data_files=SMOLTALK_FILE, split="train")
+    order = torch.randperm(len(smoltalk)).tolist()
+    chats += [render(tokenizer, smoltalk[i]["messages"]) for i in order[:SMOLTALK]]
+    chats = [chat for chat in chats if len(chat[0]) <= TOKENS_PER_STEP]
+    order = torch.randperm(len(chats)).tolist()
+    return [chats[i] for i in order]
 
 
 def pack(chats: list[Chat]) -> list[list[Chat]]:
