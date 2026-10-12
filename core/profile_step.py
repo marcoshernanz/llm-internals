@@ -1,4 +1,5 @@
-"""Profile training steps of the core model. Run with ``modal run gpu.py --module core.profile_step``.
+"""Profile training steps of the core model.
+Run with ``uv run modal run gpu.py --modules core.profile_step``.
 
 Each model, tiny and wide, is profiled twice: as written, and with the Triton RMSNorm swapped in.
 Each run prints how busy the GPU was, how many kernels one step launched, how often the CPU stopped
@@ -85,7 +86,7 @@ def profile_steps(label: str, config: Config, triton_rmsnorm: bool) -> None:
 
 
 def main() -> None:
-    assert DEVICE == "cuda", "needs an NVIDIA GPU: modal run gpu.py --module core.profile_step"
+    assert DEVICE == "cuda", "needs an NVIDIA GPU: run it through gpu.py"
     print(f"device: {torch.cuda.get_device_name()}")
     for label, config in [("tiny", TINY_CONFIG), ("wide", WIDE_CONFIG)]:
         profile_steps(label, config, triton_rmsnorm=False)
