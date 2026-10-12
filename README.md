@@ -29,6 +29,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/gsm8k.py` | GSM8K: the 4-shot prompt, two graders (strict and last number) and pass@k; scores the base model's greedy answers and pass@1 to pass@16 |
 | `post/check_gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
 | `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them; prints the base model's loss on one conversation, token by token |
+| `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems as chats, in batches padded to their longest; the held-out loss and the probability of `<\|im_end\|>` before and after, then the test questions asked in chat format |
 | `post/check_chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
 | `post/chat_baseline.py` | asks the base model GSM8K questions zero-shot in Qwen's chat format: how its answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
