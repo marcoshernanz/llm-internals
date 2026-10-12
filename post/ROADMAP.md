@@ -149,11 +149,11 @@ Each stage starts from a problem we can see in the previous stage's output.
 
 ### 1. SFT: teach it to take turns
 
-- **Problem:** the base model has no turn structure and doesn't stop. `post/chat_baseline.py` measures it on greedy answers to the first 200 GSM8K test questions, asked zero-shot in chat format:
+- **Problem:** the base model has no turn structure and doesn't stop. `post/eval_chat.py` measures it on greedy answers to the first 200 GSM8K test questions, asked zero-shot in chat format:
   - None of the 200 closes its turn with `<|im_end|>`. 88% run to the 256-token limit; 12% end the document with `<|endoftext|>`.
   - Most begin by repeating the question.
   - 6% are right by last number, against 57% 4-shot. The model can solve them, but nothing in this format draws it out.
-  - Where a held-out answer ends (`post/chat.py`), the base model gives `<|im_end|>` a probability of 3.2e-7 and `<|endoftext|>` 0.93. It knows how to end a document, not a turn.
+  - Where a held-out answer ends (`post/eval_sft.py`), the base model gives `<|im_end|>` a probability of 3.2e-7 and `<|endoftext|>` 0.93. It knows how to end a document, not a turn.
 - **Build:**
   - Qwen's ChatML chat template.
   - Loss on assistant tokens only.
@@ -164,7 +164,7 @@ Each stage starts from a problem we can see in the previous stage's output.
 - **Check:**
   - It stops at `<|im_end|>`.
   - GSM8K accuracy, asked zero-shot in chat format.
-- **First run** (`post/sft.py`, 400 steps of 4 GSM8K chats, 2 minutes on the L4), on the first 50 test questions:
+- **First run** (`post/eval_sft.py`, which runs `post/sft.py`, 400 steps of 4 GSM8K chats, 2 minutes on the L4), on the first 50 test questions:
   - 94% close their turn with `<|im_end|>`, against 0% for the base model; its probability where answers end went from 1.3e-6 to 0.91.
   - 40% right, against 6%. 4-shot, the base model gets 57%.
   - 28% of the tokens read were padding.
@@ -291,7 +291,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Datasets (`datasets`).
   - `transformers`, only to check our logits.
 - **Write:** everything else. TRL, verl, Unsloth and vLLM are code to read, not run.
-- **Where:** `post/`, one file per mechanism, with the same style rules as `core/`. Qwen3's RMSNorm does the same math with the same epsilon (1e-6) as `core/model.py`, so the Triton RMSNorm kernel computes it too.
+- **Where:** `post/`, one file per mechanism, with the same style rules as `core/`. Mechanism files hold only the mechanism; everything that measures it lives apart: correctness in `check_*.py`, speed in `bench_*.py`, quality in `eval_*.py`. Qwen3's RMSNorm does the same math with the same epsilon (1e-6) as `core/model.py`, so the Triton RMSNorm kernel computes it too.
 - **Read alongside:**
   - `reasoning-from-scratch`: pure-PyTorch GRPO on Qwen3-0.6B, one mechanism per file. It took MATH-500 from 15.2% to 47.4% in 50 steps.
   - `nanochat`: `chat_sft.py` and `chat_rl.py`.
