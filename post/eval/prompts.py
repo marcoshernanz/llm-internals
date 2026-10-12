@@ -1,9 +1,9 @@
 """
 Ask everyday prompts, none of them math, before and after SFT (post/sft.py), and print both answers
-to each. SFT on GSM8K alone shows the model one kind of conversation only: a word problem, then a
-worked solution ending in "The answer is N.". This shows what that does to everything else, and
-counts the answers that end the GSM8K way. Greedy, in chat format, stopping at <|im_end|> or
-<|endoftext|>.
+to each. SFT on GSM8K alone showed the model one kind of conversation only: a word problem, then a
+worked solution ending in "The answer is N.". After it, everyday answers mostly ended as documents
+do, with <|endoftext|>, or the GSM8K way. This counts how the answers end, and the ones that end
+the GSM8K way. Greedy, in chat format, stopping at <|im_end|> or <|endoftext|>.
 Run with ``uv run modal run gpu.py --modules post.eval.prompts``.
 
 Shape letters used in the comments:
