@@ -33,7 +33,7 @@ from post.gsm8k import (
     reference_answer,
     strict_answer,
 )
-from post.qwen3 import load_qwen3, load_tokenizer
+from post.qwen3 import Qwen3, load_qwen3, load_tokenizer
 from post.sampler import generate
 
 STOPS = ["<|im_end|>", "<|endoftext|>"]  # the end of a turn, the end of a document
@@ -57,22 +57,19 @@ def split_answer(row: list[int], endings: dict[int, str]) -> tuple[list[int], st
     return row, LIMIT
 
 
-def main() -> None:
-    tokenizer = load_tokenizer(REPO_ID)
-    model = load_qwen3(REPO_ID, DTYPE, DEVICE)
-    model.compile(fullgraph=True)
+def ask(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
+    """Ask each question zero-shot in chat format, greedy, and print how the answers end, the first
+    answer of each ending, and how many are right."""
     stop_ids = [token_id(tokenizer, token) for token in STOPS]
     endings = {token_id(tokenizer, token): token for token in ENDINGS}
-    test = load_gsm8k("test")
-
-    print(f"greedy answers, zero-shot in chat format, to the first {GREEDY_QUESTIONS} questions")
+    print(f"greedy answers, zero-shot in chat format, to the first {len(problems)} questions")
     start = time.perf_counter()
     counts = {ending: 0 for ending in [*ENDINGS, LIMIT]}
     lengths = {ending: 0 for ending in [*ENDINGS, LIMIT]}  # answer tokens, summed
     examples = {}  # the first answer of each ending, special tokens shown
     strict_right = 0
     last_right = 0
-    for i, problem in enumerate(test[:GREEDY_QUESTIONS]):
+    for i, problem in enumerate(problems):
         prompt = render_prompt(tokenizer, [{"role": "user", "content": problem["question"]}])
         ids = torch.tensor(prompt, device=DEVICE)  # [T]
         new_ids, _ = generate(model, ids, 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
@@ -92,16 +89,25 @@ def main() -> None:
                 f"right by last number {last_right / (i + 1):4.0%}, "
                 f"by strict {strict_right / (i + 1):4.0%}"
             )
-    print(f"({(time.perf_counter() - start) / 60:.0f} minutes; 4-shot: 57% by last number)")
+    print(f"({(time.perf_counter() - start) / 60:.1f} minutes)")
 
     print("\nhow the answers ended: answers, share, tokens before the ending on average")
     for ending, count in counts.items():
         mean = lengths[ending] / count if count else 0
-        print(f"{ending:>22}: {count:>4} {count / GREEDY_QUESTIONS:5.0%} {mean:6.0f}")
+        print(f"{ending:>22}: {count:>4} {count / len(problems):5.0%} {mean:6.0f}")
 
     for ending, (i, text) in examples.items():
         print(f"\n--- the first answer that ended at {ending}: question {i + 1} ---")
         print(text)
+
+
+def main() -> None:
+    tokenizer = load_tokenizer(REPO_ID)
+    model = load_qwen3(REPO_ID, DTYPE, DEVICE)
+    model.compile(fullgraph=True)
+    test = load_gsm8k("test")
+    print("4-shot, the same questions: 57% right by last number (post/gsm8k.py)")
+    ask(model, tokenizer, test[:GREEDY_QUESTIONS])
 
 
 if __name__ == "__main__":
