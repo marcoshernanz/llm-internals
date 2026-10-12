@@ -17,8 +17,7 @@ Shape letters used in the comments:
 import torch
 from torch import Tensor
 
-from post.generate import DEVICE, REPO_ID
-from post.qwen3 import KVCache, Qwen3, load_qwen3
+from post.qwen3 import DEVICE, REPO_ID, KVCache, Qwen3, load_qwen3
 from post.sampler import new_caches
 
 SHAPE = (4, 32)  # [B, T], the batch and its prompt length
