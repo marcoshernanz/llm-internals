@@ -3,7 +3,7 @@ Check batching: each row of a batch must get the same logits as that row run on 
 cached step. Two batches: rows with different prompts, read together; and rows sharing one prompt,
 read once and copied into every row, as the sampler does. After the prompt every row reads different
 random tokens, so a row that leaked into another would show. All in fp32, so any difference beyond
-rounding is a bug. Run with ``uv run python kaggle_run.py post.check_batch``.
+rounding is a bug. Run with ``uv run modal run gpu.py --modules post.check_batch``.
 
 Shape letters used in the comments:
     B   rows of the batch
