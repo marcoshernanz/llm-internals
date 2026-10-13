@@ -23,6 +23,7 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/sampler.py` | samples answers with a KV cache, several rows at once: the prompt read once and its cache copied into every row, then one token per row per step until a stop token |
 | `post/gsm8k.py` | GSM8K: the data, the 4-shot prompt and two graders (strict and last number) |
 | `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them |
+| `post/linear_cross_entropy.py` | the head fused with the cross-entropy loss, a chunk of positions at a time, with the gradients computed in the forward pass: a step's logits are never all in memory |
 | `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems mixed with everyday smol-smoltalk conversations, packed end to end into steps of up to 2,048 tokens with no padding |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
@@ -31,7 +32,9 @@ The project started as a reimplementation of DeepSeek-V4.1-Flash. That version i
 | `post/check/gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
 | `post/check/chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
 | `post/check/packing.py` | checks each conversation in a packed row gets the same logits as on its own, and shows what plain causal attention does instead |
+| `post/check/loss.py` | checks the fused loss's gradients are as close to the exact ones, computed in fp32, as the plain loss's |
 | `post/bench/generate.py` | times generation without a cache, rerunning the whole sequence per token, then the sampler at batches of 1 to 64; prints 16 sampled answers |
+| `post/bench/memory.py` | peak memory of one SFT step at 1,024 to 4,096 tokens: with no head, with the plain loss and with the fused one |
 | `post/eval/gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
 | `post/eval/chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, tokens read against padded batches, then the test questions asked in chat format |
