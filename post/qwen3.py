@@ -294,17 +294,12 @@ class Qwen3(nn.Module):
         self.layers = nn.ModuleList(Block(config) for _ in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
-    def forward(
-        self,
-        ids: Tensor,
-        caches: list[KVCache] | None = None,
-        last_only: bool = False,
-        packing: Packing | None = None,
+    def hidden(
+        self, ids: Tensor, caches: list[KVCache] | None = None, packing: Packing | None = None
     ) -> Tensor:  # [B, T]
-        """With caches, one per layer, ids continue the sequence the caches hold. With last_only,
-        only the last position gets logits: it alone predicts the next token, and logits for every
-        position are big, a row of V = 151,936 numbers each. With packing, ids is one row of
-        conversations laid end to end, and each is computed as if it were alone."""
+        """The last block's output, normed: the vector the head turns into each position's logits.
+        With caches, one per layer, ids continue the sequence the caches hold. With packing, ids is
+        one row of conversations laid end to end, and each is computed as if it were alone."""
         if packing is None:
             start = 0 if caches is None else caches[0].length  # position of the first token of ids
             positions = torch.arange(start, start + ids.size(1), device=ids.device)  # [T]
@@ -315,7 +310,18 @@ class Qwen3(nn.Module):
         for i, layer in enumerate(self.layers):
             cache = None if caches is None else caches[i]
             x = layer(x, cos, sin, cache, packing)  # [B, T, D]
-        x = self.norm(x)  # [B, T, D]
+        return self.norm(x)  # [B, T, D]
+
+    def forward(
+        self,
+        ids: Tensor,
+        caches: list[KVCache] | None = None,
+        last_only: bool = False,
+        packing: Packing | None = None,
+    ) -> Tensor:  # [B, T]
+        """The logits, a row of V = 151,936 numbers for each position. With last_only, only the
+        last position gets them: it alone predicts the next token."""
+        x = self.hidden(ids, caches, packing)  # [B, T, D]
         if last_only:
             x = x[:, -1:]  # [B, 1, D], so T is 1 below
         return F.linear(x, self.embed_tokens.weight)  # [B, T, V], the head is the embedding table

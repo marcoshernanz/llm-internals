@@ -9,7 +9,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 | # | Stage | Status |
 |---|---|---|
 | 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | Done |
-| 1 | SFT | Not started |
+| 1 | SFT | Done |
 | 2 | LoRA, then QLoRA | Not started |
 | 3 | Rejection sampling | Not started |
 | 4 | RL with verifiable rewards | Not started |
@@ -159,6 +159,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Loss on assistant tokens only.
   - Several conversations packed per sequence, with no attention across them (done, below).
   - A full fine-tune.
+  - The head fused with the loss, a chunk of positions at a time (done, below).
 - **Problem we'll hit:** the logits for 8k tokens × a 152k vocab are 4.6 GiB in fp32, so the loss is computed in chunks.
 - **Data:** `smol-smoltalk` (built for models under 1B), plus GSM8K as chats.
 - **Check:**
@@ -184,6 +185,23 @@ Each stage starts from a problem we can see in the previous stage's output.
   - GSM8K, first 50 test questions: 98% close their turn. 44% right by strict, the same as with GSM8K alone; 46% by last number. Where held-out answers end, `<|im_end|>` gets 0.90 (0.75 before); the held-out loss is 0.575 (0.569).
   - The mistakes left are the model's own, from pre-training: bacteria "generally smaller than viruses", and three sentences where two were asked for.
   - 420 steps, 3.2 minutes, 3,765 tokens per second (3,212 with 1,024-token steps). PyTorch's peak allocation was 15.7 GiB, yet twice the GPU ran out: about 21 GiB of the L4's 22 was held by PyTorch's cache. The blocks cached from earlier steps were the wrong size for this step's 1.2 GB of fp32 logits. It emptied the cache and carried on. That's the next problem.
+- **Fused loss** (done): the head and the cross-entropy computed together, a chunk at a time.
+  - The problem (`post/bench/memory.py`, peak GiB of one step, of the L4's 22.1; the weights and AdamW's moments are 6.7 of it):
+
+    | tokens | no head | plain loss | its logits | fused loss | its logits |
+    |---|---|---|---|---|---|
+    | 1,024 | 9.7 | 11.7 | +2.0 | 11.7 | +2.0 |
+    | 2,048 | 11.9 | 15.7 | +3.7 | 14.2 | +2.3 |
+    | 4,096 | 16.4 | out of memory | | 18.7 | +2.3 |
+
+    The plain loss's logits cost about 3.3 fp32 copies of `[T, V]`: the log-probabilities saved for the backward pass, the gradient coming into them, and the gradient going out.
+  - The fix (`post/linear_cross_entropy.py`), as Liger Kernel does it: chunks of 1,024 positions, each chunk's gradients computed in the forward pass from `softmax - onehot`, its logits then thrown away. Its cost stays flat at about 2.3 GiB.
+  - Only positions whose target counts go through the head. Liger takes every position with an ignore index; picking the counted positions first does the same math and skips the prompt's 28%. The alternatives: recompute each chunk's logits in the backward pass, one more matmul; or Cut Cross-Entropy, a kernel that never writes the logits to GPU memory.
+  - The check (`post/check/loss.py`): both losses round in bf16, so each is measured against the exact gradient, the head in fp32. Over all weights both are 0.84% off. The largest error is on the same norm weight in both: 2.5% plain, 3.0% fused.
+  - SFT at 2,048 tokens per step, as before: the same loss at every logged step to 2 or 3 digits. Held-out loss 0.576 (0.575 plain), `<|im_end|>` 0.89 (0.90), 50% right by strict (44%: 3 of 50 questions, within noise). Peak memory 13.9 GiB (15.7), and no cache warnings.
+  - SFT at 4,096 tokens per step fits: 18.6 GiB, no warnings, 4,144 tokens per second. But it is 194 steps instead of 420, and the model learns less: `<|im_end|>` gets 0.13 where held-out answers end, and the held-out loss is 0.595. 3 of the 8 everyday answers were still mid-sentence at the 160-token limit.
+    - Why: Adam moves each weight by about the learning rate per step, however many tokens the step has, so half the steps go about half as far.
+    - Open recipes use 4,096-token rows too, but many rows per step and thousands of steps. Ours is 720K tokens in all, so the number of steps is the limit: back to 2,048.
 - **Frontier:** everyone (DeepSeek V4.1, Qwen3, OLMo 3, Llama 4, Nemotron 3).
 - **Runs on:** Modal L4, in bf16.
 
