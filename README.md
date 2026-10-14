@@ -1,8 +1,16 @@
-# deepseek-v4.1-flash
+# llm-internals
 
 A minimal, from-scratch implementation of how a modern LLM works: model, pre-training, custom kernels and post-training. The goal is to learn the mechanisms, not to train a useful model, and each choice follows what most major model families agree on.
 
-The project started as a reimplementation of DeepSeek-V4.1-Flash. That version is kept, frozen, in `deepseek_v41_flash/` with its spec in `deepseek_v41_flash/target.md`.
+## What's here
+
+- **DeepSeek-V4.1-Flash, rebuilt** (`deepseek_v41_flash/`): the architecture from its technical report, scaled down. Compressed sparse attention with a top-k indexer and its KL loss, mHC hyper-connections with Sinkhorn mixing, Engram hashed n-gram memory, the DSpark speculative-decoding head and its loss, and the MoE. The project started here. It runs at a tiny size, is never trained, and is kept frozen with its spec in `deepseek_v41_flash/target.md`.
+- **A DeepSeek-V3-style model and Triton kernels** (`core/`): MLA and a fine-grained MoE with bias-based load balancing, a TinyStories pre-training loop and a profiler. RMSNorm forward and backward are written in Triton, joined by an `autograd.Function` and checked against PyTorch in fp32 and bf16.
+- **Post-training of Qwen3-0.6B-Base** (`post/`), every algorithm in plain PyTorch:
+  - Qwen3 in our own code: logits match `transformers` to 5e-5, and 4-shot GSM8K is 57% on the first 200 test questions (the Qwen3 report gives 59.6% on all of them).
+  - A batched KV-cache sampler: 836 tokens per second at batch 64 on a T4.
+  - Full-parameter SFT with an assistant-only loss and packed sequences, no padding, on GSM8K mixed with smol-smoltalk. Asked the first 50 GSM8K test questions zero-shot in chat format, answers that close their turn go from 0% to 96% and right answers from 6% to 52%.
+  - The head fused with the cross-entropy, a chunk of positions at a time: 4,096-token steps fit in 18.7 GiB on an L4, where the plain loss runs out of memory.
 
 ## Layout
 
@@ -82,4 +90,4 @@ Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
 3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and RMSNorm (forward, backward and autograd) are done.
-4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`.
+4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT is done, with packing and the fused loss.
