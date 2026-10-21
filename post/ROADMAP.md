@@ -216,8 +216,19 @@ Each stage starts from a problem we can see in the previous stage's output.
   - A curve of peak memory for full fine-tuning, LoRA and QLoRA.
   - LoRA's loss tracks full fine-tuning's on the stage-1 data.
   - The 8B teacher shrinks to ~5 GB in NF4, with perplexity close to bf16.
+- **The problem, seen** (`post/bench/finetune_memory.py`): a full fine-tune keeps 16 bytes per weight. For Qwen3-1.7B-Base that's 25.6 GiB of the L4's 22.1. Its forward and backward passes fit; the first optimizer step runs out of memory as AdamW creates its two moments.
+- **LoRA** (done, `post/lora.py`): rank 32, alpha 32, on all 196 linear layers. Base weights frozen in bf16. LoRA's matrices at 1e-4, 10× full fine-tuning's rate.
+  - The check (`post/check/lora.py`): right after LoRA is added, the logits match the loaded model's to the bit. Only the expected weights train, and after a step every frozen weight is unchanged.
+  - First run, every loaded weight frozen: 20M weights train and the peak is 5.9 GiB, but the model never learns to end its turn.
+    - `<|im_end|>` gets 0.00037 where held-out answers end. Its place goes to junk tokens: "The answer is 82. dóla. spep. dóla. spep. …". All 50 GSM8K answers run to the token limit.
+    - Why (`post/eval/embeddings.py`): the base model never trained `<|im_start|>`'s and `<|im_end|>`'s rows. They're one short vector (length 0.35, against a median of 0.97), the same to the bit as 290 other tokens' rows.
+    - Qwen3-0.6B's head is its embedding table. With it frozen, `<|im_end|>`'s logit equals those 290 logits whatever the hidden state, so its probability stays below 1 in 291. A full fine-tune trains that row and moves it away; frozen, it can't move.
+  - The fix, as toolkits do when a chat format brings tokens the base model never learned: the embedding table trains in full, in fp32, at full fine-tuning's 1e-5. LoRA's 10× rate makes up for B starting at zero, and doesn't apply to a matrix trained directly. The alternative is to train only those tokens' rows.
+  - With the table trained, LoRA tracks full fine-tuning: the same loss at every logged step to within 0.03. Held-out loss 0.588 (0.576 full), `<|im_end|>` 0.91 (0.89), 98% of GSM8K answers close their turn (96%), 42% right by strict (50%; 4 of 50 questions).
+  - It trains 176M weights, 156M of them the table, and peaks at 8.6 GiB (13.9 full). It runs at 4,317 tokens per second (3,831 full).
+  - Qwen3-1.7B-Base now fits: 346M weights train, peak 15.8 GiB.
 - **Frontier:** practitioner tools. The labs fine-tune fully. LoRA appears in RL research, where rank 1 is enough.
-- **Runs on:** Kaggle.
+- **Runs on:** Modal L4.
 
 ### 3. Rejection sampling: learn from its own right answers
 
