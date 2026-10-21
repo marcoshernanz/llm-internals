@@ -20,7 +20,7 @@ Shape letters used in the comments:
 import torch
 from datasets import load_dataset
 from tokenizers import Tokenizer
-from torch import Tensor
+from torch import Tensor, nn
 
 from post.chat import gsm8k_chat, render, sft_loss
 from post.gsm8k import load_gsm8k
@@ -36,6 +36,7 @@ MAX_GRAD_NORM = 1.0  # a step's gradient is scaled down to this length if longer
 LOG_EVERY = 25  # steps
 
 Chat = tuple[list[int], list[bool]]  # a conversation's token ids, and which ones the loss counts
+Group = tuple[list[nn.Parameter], float]  # weights that train, and their peak learning rate
 
 
 def load_chats(tokenizer: Tokenizer) -> list[Chat]:
@@ -76,26 +77,31 @@ def join(chats: list[Chat]) -> tuple[Tensor, Tensor, Packing]:
     return ids_t, mask_t, packing
 
 
-def learning_rate(step: int, steps: int) -> float:
+def learning_rate(step: int, steps: int, peak: float) -> float:
     """Up in a straight line over the warmup, then down in a straight line to 0 at the end."""
     if step < WARMUP_STEPS:
-        return LEARNING_RATE * (step + 1) / WARMUP_STEPS
-    return LEARNING_RATE * (steps - step) / (steps - WARMUP_STEPS)
+        return peak * (step + 1) / WARMUP_STEPS
+    return peak * (steps - step) / (steps - WARMUP_STEPS)
 
 
-def train(model: Qwen3, chats: list[Chat]) -> None:
+def train(model: Qwen3, chats: list[Chat], groups: list[Group] | None = None) -> None:
+    """Train the groups of weights, each at its own peak learning rate: by default every weight
+    at LEARNING_RATE, a full fine-tune. LoRA trains other groups (post/lora.py)."""
+    if groups is None:
+        groups = [(list(model.parameters()), LEARNING_RATE)]
     steps = pack(chats)
+    weights = [weight for group, _ in groups for weight in group]
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
+        [{"params": group, "lr": peak} for group, peak in groups], weight_decay=0.0, fused=True
     )
     for step, batch in enumerate(steps):
         ids, mask, packing = join(batch)  # [1, T] each
-        for group in optimizer.param_groups:
-            group["lr"] = learning_rate(step, len(steps))
-        with torch.autocast(DEVICE, dtype=torch.bfloat16):  # matmuls in bf16, weights in fp32
+        for param_group, (_, peak) in zip(optimizer.param_groups, groups):
+            param_group["lr"] = learning_rate(step, len(steps), peak)
+        with torch.autocast(DEVICE, dtype=torch.bfloat16):  # matmuls in bf16
             loss = sft_loss(model, ids, mask, packing)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
+        torch.nn.utils.clip_grad_norm_(weights, MAX_GRAD_NORM)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if (step + 1) % LOG_EVERY == 0:
