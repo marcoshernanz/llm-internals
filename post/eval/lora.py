@@ -3,21 +3,22 @@ Run SFT with LoRA (post/lora.py) and measure it as post/eval/sft.py measures ful
 loss on held-out GSM8K conversations and the probability of <|im_end|> where their answers end,
 before and after; the time and peak memory of training; then the test questions asked zero-shot in
 chat format. Same conversations in the same order as the full fine-tune, so the losses it prints
-every 25 steps compare with that run's, step for step.
+every 25 steps compare with that run's, step for step. post/eval/qlora.py runs the same for QLoRA.
 Run with ``uv run modal run gpu.py --modules post.eval.lora``.
 """
 
 import time
 
 import torch
+from tokenizers import Tokenizer
 
 from post.chat import gsm8k_chat, render
 from post.eval.chat import ask
 from post.eval.sft import HELD_OUT, report, stops
 from post.gsm8k import load_gsm8k
 from post.lora import ALPHA, EMBEDDING_LEARNING_RATE, LEARNING_RATE, RANK, add_lora, lora_groups
-from post.qwen3 import DEVICE, DTYPE, REPO_ID, load_qwen3, load_tokenizer
-from post.sft import TOKENS_PER_STEP, load_chats, train
+from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
+from post.sft import TOKENS_PER_STEP, Chat, load_chats, train
 
 # post/eval/sft.py's last run, the same data with every weight trained
 FULL = (
@@ -26,22 +27,15 @@ FULL = (
 )
 
 
-def main() -> None:
-    assert DEVICE == "cuda" and DTYPE == torch.bfloat16, "SFT computes in bf16: run it on the L4"
-    torch.manual_seed(0)  # as post/sft.py: the same conversations in the same order
-    tokenizer = load_tokenizer(REPO_ID)
-    model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # frozen: bf16 is enough
-    chats = load_chats(tokenizer)
+def run(model: Qwen3, tokenizer: Tokenizer, chats: list[Chat], reference: str) -> None:
+    """Train the model's LoRA on the chats, measured; reference is an earlier run's results."""
     test = load_gsm8k("test")[:HELD_OUT]
     held = [render(tokenizer, gsm8k_chat(problem)) for problem in test]
-    add_lora(model, RANK, ALPHA)
-    weights = sum(weight.numel() for weight in model.parameters())
     trained = sum(weight.numel() for weight in model.parameters() if weight.requires_grad)
     print(
         f"LoRA of rank {RANK} on every linear layer, and the embedding table: "
         f"{trained / 1e6:.1f}M weights train"
     )
-    print(f"{trained / (weights - trained):.1%} as many as are frozen")
 
     print("\nbefore SFT:")
     report(model, tokenizer, held)
@@ -62,9 +56,20 @@ def main() -> None:
     if not stops(report(model, tokenizer, held)):
         return
 
-    model.to(torch.bfloat16)  # LoRA's matrices too: bf16 for generation, as the loaded weights
-    print(f"\n{FULL}")
+    for weight in model.parameters():  # the table and LoRA's matrices: bf16 for generation
+        weight.data = weight.data.to(torch.bfloat16)  # NF4's buffers stay as they are
+    print(f"\n{reference}")
     ask(model, tokenizer, test)
+
+
+def main() -> None:
+    assert DEVICE == "cuda" and DTYPE == torch.bfloat16, "SFT computes in bf16: run it on the L4"
+    torch.manual_seed(0)  # as post/sft.py: the same conversations in the same order
+    tokenizer = load_tokenizer(REPO_ID)
+    model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # frozen: bf16 is enough
+    chats = load_chats(tokenizer)
+    add_lora(model, RANK, ALPHA)
+    run(model, tokenizer, chats, FULL)
 
 
 if __name__ == "__main__":
