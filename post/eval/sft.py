@@ -27,6 +27,9 @@ from post.sft import TOKENS_PER_STEP, Chat, load_chats, pack, train
 HELD_OUT = 50  # the first test problems: the loss on them before and after, then asked
 SHOWN = 6  # targets printed from each end of an answer
 PADDED_BATCH = 4  # conversations per batch in the first run, padded to the longest
+# Below this probability of <|im_end|> where answers end, it is rarely the first choice: greedy
+# answers would run to the token limit, a run of 14 minutes for 50 questions, so none are asked
+MIN_STOP = 0.01
 
 
 @torch.no_grad()
@@ -70,11 +73,20 @@ def show_answer(model: Qwen3, tokenizer: Tokenizer, chat: Chat) -> None:
     print(f"its first choices where <|im_end|> should come: {', '.join(choices)}")
 
 
-def report(model: Qwen3, tokenizer: Tokenizer, held: list[Chat]) -> None:
+def report(model: Qwen3, tokenizer: Tokenizer, held: list[Chat]) -> float:
+    """Print the held-out loss and the first answer; return the probability of <|im_end|>."""
     loss, stop = held_out(model, held)
     print(f"held-out loss {loss:.3f}, probability of <|im_end|> where answers end {stop:.2g}")
     print("the first held-out answer: target, then the probability the model gives it")
     show_answer(model, tokenizer, held[0])
+    return stop
+
+
+def stops(stop: float) -> bool:
+    """Whether the model ends its turns often enough for its answers to be worth asking."""
+    if stop < MIN_STOP:
+        print(f"\n<|im_end|> below {MIN_STOP} where answers end: the questions aren't asked")
+    return stop >= MIN_STOP
 
 
 def token_shares(chats: list[Chat]) -> int:
@@ -115,7 +127,8 @@ def main() -> None:
     print(f"peak GPU memory: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
 
     print("\nafter SFT:")
-    report(model, tokenizer, held)
+    if not stops(report(model, tokenizer, held)):
+        return
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
     print("\nthe base model on these questions (post/eval/chat.py): closed its turn 0%, right 6%")
