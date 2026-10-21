@@ -14,9 +14,10 @@ the probabilities, with 1 taken off at the true token. Through the head, z = W h
 reaches h as dloss/dz @ W, and W as the outer product of dloss/dz with h.
 
 So each chunk's gradients are computed right away, in the forward pass, and its logits thrown away:
-what's kept is the gradient for every hidden state and the head's, summed over the chunks. The loss
-is the last thing computed, so the gradient coming back into it is a single number, 1 unless the
-loss is scaled; the backward pass only multiplies by it.
+what's kept is the gradient for every hidden state and the head's, summed over the chunks; the
+head's only if it trains, and with LoRA it's frozen (post/lora.py). The loss is the last thing
+computed, so the gradient coming back into it is a single number, 1 unless the loss is scaled; the
+backward pass only multiplies by it.
 Matmuls in bf16, as autocast runs them; the softmax in fp32.
 
 Shape letters used in the comments:
@@ -43,7 +44,9 @@ class LinearCrossEntropy(torch.autograd.Function):
         count = targets.size(0)
         weight16 = weight.to(torch.bfloat16)  # [V, D]
         grad_hidden = torch.empty_like(hidden)  # [A, D]
-        grad_weight = torch.zeros_like(weight)  # [V, D], fp32: the chunks' sum
+        grad_weight = None  # [V, D]: the chunks' sum, if the head trains
+        if ctx.needs_input_grad[1]:
+            grad_weight = torch.zeros_like(weight, dtype=torch.float32)  # [V, D]
         total = torch.zeros((), device=hidden.device)  # the losses' sum, fp32
         for start in range(0, count, CHUNK):
             end = min(start + CHUNK, count)
@@ -61,12 +64,15 @@ class LinearCrossEntropy(torch.autograd.Function):
             z /= count  # [C, V], of the mean
             grad_z = z.to(torch.bfloat16)  # [C, V]
             grad_hidden[start:end] = grad_z @ weight16  # [C, D]
-            grad_weight += grad_z.T @ h  # [V, D]
+            if grad_weight is not None:
+                grad_weight += grad_z.T @ h  # [V, D]
         ctx.save_for_backward(grad_hidden, grad_weight)
         return total / count
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor, None]:
+    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None]:
         (grad_loss,) = grad_outputs  # [], the loss's: its only output
-        grad_hidden, grad_weight = ctx.saved_tensors  # [A, D], [V, D]
-        return grad_hidden * grad_loss, grad_weight * grad_loss, None  # targets get none
+        grad_hidden, grad_weight = ctx.saved_tensors  # [A, D], [V, D] or None
+        if grad_weight is not None:
+            grad_weight = grad_weight * grad_loss  # [V, D]
+        return grad_hidden * grad_loss, grad_weight, None  # targets get none
