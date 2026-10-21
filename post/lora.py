@@ -30,6 +30,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from post.nf4 import NF4Linear
 from post.qwen3 import DEVICE, REPO_ID, Linear, Qwen3, load_qwen3, load_tokenizer
 from post.sft import Group, load_chats, train
 
@@ -40,16 +41,14 @@ EMBEDDING_LEARNING_RATE = 1e-5  # the embedding table's: full fine-tuning's, as 
 
 
 class LoRA(nn.Module):
-    """A frozen linear layer, plus a learned correction of rank r."""
+    """A frozen linear layer, in bf16 or NF4 (post/nf4.py), plus a learned correction of rank r."""
 
-    def __init__(self, linear: Linear, rank: int, alpha: float) -> None:
+    def __init__(self, linear: Linear | NF4Linear, rank: int, alpha: float) -> None:
         super().__init__()
-        out_features, in_features = linear.weight.shape
-        device = linear.weight.device
-        bound = in_features**-0.5  # as nn.Linear initializes its weight
-        a = torch.empty(rank, in_features, device=device)  # [r, in], fp32: trained
+        bound = linear.in_features**-0.5  # as nn.Linear initializes its weight
+        a = torch.empty(rank, linear.in_features, device=DEVICE)  # [r, in], fp32: trained
         a = a.uniform_(-bound, bound)  # [r, in]
-        b = torch.zeros(out_features, rank, device=device)  # [out, r]
+        b = torch.zeros(linear.out_features, rank, device=DEVICE)  # [out, r]
         self.linear = linear  # frozen
         self.a = nn.Parameter(a)  # A
         self.b = nn.Parameter(b)  # B
@@ -71,7 +70,7 @@ def add_lora(model: Qwen3, rank: int, alpha: float) -> None:
     modules = list(model.modules())  # before wrapping: a LoRA's own linear isn't wrapped again
     for module in modules:
         for name, child in list(module.named_children()):
-            if isinstance(child, Linear):
+            if isinstance(child, Linear | NF4Linear):
                 setattr(module, name, LoRA(child, rank, alpha))
 
 
