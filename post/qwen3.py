@@ -86,6 +86,8 @@ def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:  # [B, T, H, Dh],
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int) -> None:
         super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
         self.weight = nn.Parameter(torch.empty(out_features, in_features))  # [out, in], loaded
 
     def forward(self, x: Tensor) -> Tensor:  # [..., in]
@@ -335,12 +337,14 @@ def load_qwen3(repo_id: str, dtype: torch.dtype, device: str) -> Qwen3:
     fields = [field.name for field in dataclasses.fields(Qwen3Config)]
     config = Qwen3Config(**{name: raw[name] for name in fields})
 
-    model = Qwen3(config)
+    with torch.device("meta"):  # shapes only, no memory: the checkpoint's tensors fill them below
+        model = Qwen3(config)
     weights = {}
     for file in path.glob("*.safetensors"):  # bigger checkpoints are split into several files
         weights.update(load_file(file))  # tensor name -> tensor, in the checkpoint's bf16
     weights = {name.removeprefix("model."): tensor for name, tensor in weights.items()}
-    model.load_state_dict(weights)  # strict: every tensor must fill a parameter, and back
+    # strict: every tensor must fill a parameter, and back; assign: the tensors become them
+    model.load_state_dict(weights, assign=True)
     return model.to(device=device, dtype=dtype)
 
 
