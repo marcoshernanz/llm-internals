@@ -1,8 +1,10 @@
 """
 Measure the GPU memory of SFT steps (post/sft.py) for Qwen3 models of growing size, fine-tuned
-fully and with LoRA (post/lora.py). A full fine-tune keeps 16 bytes per weight in memory: the
-weight in fp32 (4), its gradient (4) and AdamW's two moments (8). LoRA keeps the loaded weights
-frozen in bf16, 2 bytes each, and the 16 bytes only for its own small matrices. On top of that,
+fully, with LoRA (post/lora.py) and with QLoRA (post/qlora.py). A full fine-tune keeps 16 bytes per
+weight in memory: the weight in fp32 (4), its gradient (4) and AdamW's two moments (8). LoRA keeps
+the loaded weights frozen in bf16, 2 bytes each, and the 16 bytes only for what trains: its small
+matrices and the embedding table. QLoRA stores the frozen linear layers in NF4, about half a byte
+per weight. On top of that,
 during a step, the activations the backward pass needs. The peak is taken over two steps: AdamW
 creates its moments in the first step's optimizer step, so only from the second on are they in
 memory through the forward and backward passes too. Each step is one conversation of random
@@ -18,20 +20,24 @@ import torch
 
 from post.chat import sft_loss
 from post.lora import ALPHA, RANK, add_lora
+from post.nf4 import NF4Linear, quantize
 from post.qwen3 import DEVICE, DTYPE, Packing, Qwen3, load_qwen3
 from post.sft import TOKENS_PER_STEP
 
-MODELS = ["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base"]
-METHODS = ["full", "LoRA"]
+MODELS = ["Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]
+METHODS = ["full", "LoRA", "QLoRA"]
 STEPS = 2
 GIB = 2**30
 
 
 def load(repo_id: str, method: str) -> Qwen3:
-    """The model as SFT trains it: fp32 weights to fine-tune fully, bf16 ones frozen for LoRA."""
+    """The model as SFT trains it: fp32 weights to fine-tune fully, bf16 ones frozen for LoRA,
+    and the linear layers' in NF4 for QLoRA."""
     if method == "full":
         return load_qwen3(repo_id, torch.float32, DEVICE)  # fp32: the master copy
     model = load_qwen3(repo_id, torch.bfloat16, DEVICE)  # frozen: bf16 is enough
+    if method == "QLoRA":
+        quantize(model)
     add_lora(model, RANK, ALPHA)
     return model
 
@@ -69,6 +75,8 @@ def main() -> None:
             trained = [weight for weight in model.parameters() if weight.requires_grad]
             optimizer = torch.optim.AdamW(trained, lr=0.0, weight_decay=0.0, fused=True)
             weights = sum(weight.numel() for weight in model.parameters())
+            nf4 = [module for module in model.modules() if isinstance(module, NF4Linear)]
+            weights += sum(module.in_features * module.out_features for module in nf4)
             trained_count = sum(weight.numel() for weight in trained)
             gib, ended = peak(model, optimizer)
             print(
