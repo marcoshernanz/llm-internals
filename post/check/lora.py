@@ -40,7 +40,7 @@ def main() -> None:
     print("right after LoRA is added: the same logits as the loaded model, to the bit")
 
     loras = [module for module in model.modules() if isinstance(module, LoRA)]
-    expected = sum(RANK * sum(lora.linear.weight.shape) for lora in loras)  # r (in + out) each
+    expected = sum(RANK * (lora.linear.in_features + lora.linear.out_features) for lora in loras)
     expected += model.embed_tokens.weight.numel()  # V D
     trained = [weight for weight in model.parameters() if weight.requires_grad]
     frozen = [weight for weight in model.parameters() if not weight.requires_grad]
