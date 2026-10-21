@@ -34,6 +34,8 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/linear_cross_entropy.py` | the head fused with the cross-entropy loss, a chunk of positions at a time, with the gradients computed in the forward pass: a step's logits are never all in memory |
 | `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems mixed with everyday smol-smoltalk conversations, packed end to end into steps of up to 2,048 tokens with no padding |
 | `post/lora.py` | LoRA: the loaded weights frozen in bf16, a learned correction of rank r next to each linear layer at 10 times full fine-tuning's learning rate, and the embedding table trained in full |
+| `post/nf4.py` | NF4, QLoRA's 4-bit format: 16 levels from the normal distribution, a scale per 64 weights, the scales quantized again to 8 bits, and a matmul that dequantizes each weight on the fly, in the backward pass too |
+| `post/qlora.py` | QLoRA: LoRA with every frozen linear layer stored in NF4 |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
@@ -42,15 +44,18 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/check/chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
 | `post/check/packing.py` | checks each conversation in a packed row gets the same logits as on its own, and shows what plain causal attention does instead |
 | `post/check/lora.py` | checks LoRA starts from the loaded model's exact logits, trains only its own matrices and the embedding table, and leaves every frozen weight unchanged |
+| `post/check/nf4.py` | checks NF4's levels against QLoRA's table, 4.127 bits per weight, every weight stored as its nearest level, and the matmul against autograd, keeping nothing for the backward pass |
 | `post/check/loss.py` | checks the fused loss's gradients are as close to the exact ones, computed in fp32, as the plain loss's |
 | `post/bench/generate.py` | times generation without a cache, rerunning the whole sequence per token, then the sampler at batches of 1 to 64; prints 16 sampled answers |
 | `post/bench/memory.py` | peak memory of one SFT step at 1,024 to 4,096 tokens: with no head, with the plain loss and with the fused one |
-| `post/bench/finetune_memory.py` | peak memory of SFT steps for Qwen3-0.6B and 1.7B, fine-tuned fully and with LoRA |
+| `post/bench/finetune_memory.py` | peak memory of SFT steps for Qwen3-0.6B, 1.7B and 4B, fine-tuned fully, with LoRA and with QLoRA |
 | `post/eval/gsm8k.py` | scores the base model 4-shot: greedy answers, and pass@1 to pass@16 |
 | `post/eval/chat.py` | asks GSM8K questions zero-shot in chat format: how the answers end (closing the turn with `<\|im_end\|>` or not) and how many are right |
 | `post/eval/sft.py` | runs SFT and measures it: held-out loss and the probability of `<\|im_end\|>` before and after, tokens read against padded batches, then the test questions asked in chat format |
 | `post/eval/embeddings.py` | looks at the chat tokens' rows in the base model's embedding table: their length, how many rows are the same vector, and their nearest rows |
 | `post/eval/lora.py` | runs SFT with LoRA and measures it as `post/eval/sft.py` measures full fine-tuning |
+| `post/eval/nf4.py` | the weights' memory and the held-out loss in bf16 and NF4, for Qwen3-0.6B, 1.7B and 4B |
+| `post/eval/qlora.py` | runs SFT with QLoRA and measures it as `post/eval/lora.py` measures LoRA |
 | `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
