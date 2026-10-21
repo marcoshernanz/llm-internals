@@ -10,7 +10,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 |---|---|---|
 | 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | Done |
 | 1 | SFT | Done |
-| 2 | LoRA, then QLoRA | Not started |
+| 2 | LoRA, then QLoRA | In progress |
 | 3 | Rejection sampling | Not started |
 | 4 | RL with verifiable rewards | Not started |
 | 5 | Multi-turn environments and tools | Not started |
@@ -227,6 +227,39 @@ Each stage starts from a problem we can see in the previous stage's output.
   - With the table trained, LoRA tracks full fine-tuning: the same loss at every logged step to within 0.03. Held-out loss 0.588 (0.576 full), `<|im_end|>` 0.91 (0.89), 98% of GSM8K answers close their turn (96%), 42% right by strict (50%; 4 of 50 questions).
   - It trains 176M weights, 156M of them the table, and peaks at 8.6 GiB (13.9 full). It runs at 4,317 tokens per second (3,831 full).
   - Qwen3-1.7B-Base now fits: 346M weights train, peak 15.8 GiB.
+- **NF4** (done, `post/nf4.py`): every linear layer's weight in 4 bits, as QLoRA stores it.
+  - Blocks of 64 weights. Each block is divided by its largest absolute value, and each weight is stored as the nearest of 16 levels, the normal distribution's quantiles.
+  - The block scales are quantized again: int8 in blocks of 256, as torchao does it. QLoRA uses an 8-bit float format of its own. 4.127 bits per weight in all.
+  - The matmul dequantizes to bf16 in the forward pass, and again in the backward pass instead of keeping the bf16 matrix.
+  - The check (`post/check/nf4.py`):
+    - The 16 levels match QLoRA's table, and every weight is stored as its nearest level.
+    - Over all 196 linear layers of 0.6B, the dequantized weights are 9.3% off, the largest 9.6%. With the scales exact it's the same to 3 digits.
+    - One `gate_proj` keeps nothing for the backward pass, where autograd through the dequantized weight keeps 6.0 MiB. Output and input gradient match autograd's to the bit.
+  - Memory and loss (`post/eval/nf4.py`, the answers of 50 GSM8K test conversations; the embedding table stays bf16 both ways):
+
+    | model | bf16 GiB | NF4 GiB | bf16 loss | NF4 loss |
+    |---|---|---|---|---|
+    | Qwen3-0.6B-Base | 1.11 | 0.51 | 0.958 | 1.062 |
+    | Qwen3-1.7B-Base | 3.21 | 1.27 | 0.873 | 0.933 |
+    | Qwen3-4B-Base | 7.56 | 2.50 | 0.779 | 0.850 |
+
+    4B in NF4 is still better than 1.7B in bf16, in a third of the memory.
+- **QLoRA** (done, `post/qlora.py`): every frozen linear layer in NF4, then LoRA and the trained table as before.
+  - SFT on 0.6B (`post/eval/qlora.py`), the same conversations in the same order as LoRA's run:
+    - Before training, NF4 is 0.104 behind on held-out loss (1.063 against 0.959). After, it's 0.024 behind: 0.612 against LoRA's 0.588. `<|im_end|>` gets 0.90 where answers end (0.91).
+    - Every logged step's loss is above LoRA's, by 0.02 to 0.12, typically 0.06.
+    - GSM8K, first 50 test questions: 92% close their turn (98%), 32% right by strict and by last number (42%; 5 of 50 questions).
+    - Peak 8.0 GiB (8.6): on 0.6B, most of the memory is the trained table, not the frozen layers. 3,347 tokens per second (4,317): each layer is dequantized twice per step.
+    - The 50 answers took 11.6 minutes to generate, against LoRA's 5.7: each decoded token dequantizes all 196 layers again. Production fixes this with a kernel that reads the 4-bit weights inside the matmul, or by dequantizing once for inference.
+  - Peak memory of SFT steps of 2,048 tokens (`post/bench/finetune_memory.py`), GiB of the L4's 22.1:
+
+    | model | full | LoRA | QLoRA |
+    |---|---|---|---|
+    | Qwen3-0.6B-Base | 14.2 | 8.8 | 8.2 |
+    | Qwen3-1.7B-Base | out of memory | 15.8 | 13.8 |
+    | Qwen3-4B-Base | out of memory | out of memory | out of memory, in step 2's forward pass |
+
+  - Why 4B still doesn't fit: the embedding table, trained in full. Its 389M weights take 16 bytes each (fp32 weight, gradient, AdamW's two moments): 5.8 GiB. The fused loss adds its fp32 gradient while the backward pass waits, 1.45 GiB, and that is the allocation that fails.
 - **Frontier:** practitioner tools. The labs fine-tune fully. LoRA appears in RL research, where rank 1 is enough.
 - **Runs on:** Modal L4.
 
