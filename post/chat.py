@@ -1,6 +1,7 @@
 """
-Qwen's chat format (ChatML), and the loss SFT trains with. A conversation becomes one sequence of
-token ids: each message is a header naming its role, its text, then <|im_end|> and a newline.
+Qwen's chat format (ChatML), the loss SFT trains with, and the model's answers in that format. A
+conversation becomes one sequence of token ids: each message is a header naming its role, its text,
+then <|im_end|> and a newline.
 
     <|im_start|>user
     How many clips did Natalia sell?<|im_end|>
@@ -15,20 +16,27 @@ ends with the header. Tokenizing the whole text at once can merge a newline of t
 text's first characters into one token, half given and half learned.
 
 Shape letters used in the comments:
-    B   conversations
+    B   conversations; when answering, answers sampled at once
     T   tokens per conversation
+    N   new tokens
     D   model width
     A   targets the loss counts, over all B conversations
 """
 
+import torch
 from tokenizers import Tokenizer
 from torch import Tensor
 
 from post.gsm8k import worked_solution
 from post.linear_cross_entropy import LinearCrossEntropy
-from post.qwen3 import Packing, Qwen3
+from post.qwen3 import DEVICE, Packing, Qwen3, token_id
+from post.sampler import generate
 
 Message = dict[str, str]  # {"role": "user", "content": "..."}; the roles: system, user, assistant
+# Where an answer ends: the end of its turn, the end of the document, or a new turn opened without
+# closing its own. Qwen's chat models stop at the first two
+STOPS = ["<|im_end|>", "<|endoftext|>", "<|im_start|>"]
+ROWS = 256  # answers sampled at once, from as many questions as fit
 
 
 def render(tokenizer: Tokenizer, messages: list[Message]) -> tuple[list[int], list[bool]]:
@@ -75,3 +83,29 @@ def sft_loss(
     hidden = hidden[counted]  # [A, D]
     targets = targets[counted]  # [A]
     return LinearCrossEntropy.apply(hidden, model.embed_tokens.weight, targets)
+
+
+def answers(
+    model: Qwen3,
+    tokenizer: Tokenizer,
+    questions: list[str],
+    samples: int,
+    temperature: float,
+    max_new_tokens: int,
+) -> list[list[str]]:
+    """samples answers to each question, asked zero-shot as a user turn, several questions at a
+    time. An answer is its text up to the token it stopped at, kept: one that ends in <|im_end|>
+    closed its turn."""
+    stop_ids = [token_id(tokenizer, token) for token in STOPS]
+    texts = []
+    per_batch = ROWS // samples  # questions
+    for start in range(0, len(questions), per_batch):
+        batch = questions[start : start + per_batch]
+        prompts = [render_prompt(tokenizer, [{"role": "user", "content": q}]) for q in batch]
+        prompts_t = [torch.tensor(prompt, device=DEVICE) for prompt in prompts]  # each [T]
+        new_ids = generate(model, prompts_t, samples, max_new_tokens, temperature, stop_ids)
+        for row in new_ids.tolist():  # B rows of N ids
+            ends = [i for i, token in enumerate(row) if token in stop_ids]
+            row = row[: ends[0] + 1] if ends else row  # up to the first stop, if any
+            texts.append(tokenizer.decode(row, skip_special_tokens=False))
+    return [texts[i : i + samples] for i in range(0, len(texts), samples)]
