@@ -12,10 +12,11 @@ import time
 import torch
 
 from post.chat import gsm8k_chat, render
-from post.eval.pass_at_k import QUESTIONS, measure
+from post.eval.pass_at_k import TEST_QUESTIONS, measure
 from post.gsm8k import load_gsm8k
 from post.qwen3 import DEVICE, DTYPE, REPO_ID, load_tokenizer
-from post.rejection_sampling import retrain, unread_problems
+from post.rejection_sampling import QUESTIONS, retrain
+from post.sft import unread_gsm8k
 
 # post/eval/pass_at_k.py's and post/eval/rejection_sampling.py's runs
 SFT = (
@@ -31,7 +32,7 @@ REJECTION = (
 def main() -> None:
     assert DEVICE == "cuda" and DTYPE == torch.bfloat16, "SFT computes in bf16: run it on the L4"
     tokenizer = load_tokenizer(REPO_ID)
-    problems = unread_problems()
+    problems = unread_gsm8k(QUESTIONS)
     references = [render(tokenizer, gsm8k_chat(problem)) for problem in problems]
     print(
         f"the base model fine-tuned again, on SFT's conversations plus the {len(problems)} "
@@ -44,8 +45,8 @@ def main() -> None:
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
     print(f"\n{SFT}\n{REJECTION}")
-    print(f"with the worked solutions instead, on the first {QUESTIONS} GSM8K test questions")
-    measure(model, tokenizer, load_gsm8k("test")[:QUESTIONS])
+    print(f"with the worked solutions instead, on the first {TEST_QUESTIONS} GSM8K test questions")
+    measure(model, tokenizer, load_gsm8k("test")[:TEST_QUESTIONS])
 
 
 if __name__ == "__main__":
