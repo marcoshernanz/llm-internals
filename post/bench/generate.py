@@ -76,10 +76,12 @@ def time_sampler(model: Qwen3, prompt: Tensor, stop_id: int) -> None:  # [T]
     print("\nKV cache, compiled: batch size, first run, then ms per step and tokens per second")
     for batch_size in BATCH_SIZES:
         start = time.perf_counter()
-        generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])  # compiles
+        generate(model, [prompt], batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])  # compiles
         first_run = time.perf_counter() - start
         start = time.perf_counter()
-        new_ids = generate(model, prompt, batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
+        new_ids = generate(
+            model, [prompt], batch_size, NEW_TOKENS, TEMPERATURE, [stop_id]
+        )  # [B, N]
         torch.cuda.synchronize()  # wait for the GPU, so the timing is real
         seconds = time.perf_counter() - start  # the prefill, then N - 1 decode steps
         steps = new_ids.size(1)
@@ -101,7 +103,7 @@ def main() -> None:
     time_sampler(model, prompt, stop_id)
 
     torch.manual_seed(0)
-    new_ids = generate(model, prompt, SAMPLES, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
+    new_ids = generate(model, [prompt], SAMPLES, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
     print(f"\n{PROMPT}")
     for i, row in enumerate(new_ids.tolist()):
         answer = tokenizer.decode(row)
