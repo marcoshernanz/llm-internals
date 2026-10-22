@@ -11,7 +11,7 @@ import time
 
 import torch
 
-from post.eval.pass_at_k import QUESTIONS, measure
+from post.eval.pass_at_k import TEST_QUESTIONS, measure
 from post.gsm8k import load_gsm8k
 from post.qwen3 import (
     DEVICE,
@@ -24,12 +24,13 @@ from post.qwen3 import (
 )
 from post.rejection_sampling import (
     KEEP,
+    QUESTIONS,
     SAMPLES,
     TEMPERATURE,
     retrain,
     right_answers,
-    unread_problems,
 )
+from post.sft import unread_gsm8k
 
 # post/eval/pass_at_k.py's run, on the model rejection sampling starts from
 SFT = (
@@ -44,7 +45,7 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
     load_weights(model, "sft")
-    problems = unread_problems()
+    problems = unread_gsm8k(QUESTIONS)
 
     start = time.perf_counter()
     kept = right_answers(model, tokenizer, problems)
@@ -71,8 +72,8 @@ def main() -> None:
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
     print(f"\n{SFT}")
-    print(f"after rejection sampling, on the first {QUESTIONS} GSM8K test questions")
-    measure(model, tokenizer, load_gsm8k("test")[:QUESTIONS])
+    print(f"after rejection sampling, on the first {TEST_QUESTIONS} GSM8K test questions")
+    measure(model, tokenizer, load_gsm8k("test")[:TEST_QUESTIONS])
 
 
 if __name__ == "__main__":
