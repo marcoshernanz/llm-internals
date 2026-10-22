@@ -1,12 +1,25 @@
 """
-Sample answers with Qwen3 and a KV cache, several rows at once. The prompt goes through the model
-once, at batch size 1 (prefill), and its keys and values are copied into every row. Then each step
-feeds in only the newest token of every row (decode): its query attends over the keys and values
-that every earlier position of its row left in the cache.
+Sample answers with Qwen3 and a KV cache, several prompts and several rows per prompt at once. The
+prompts go through the model once, together (prefill), and each one's keys and values are copied
+into each of its rows. Then each step feeds in only the newest token of every row (decode): its
+query attends over the keys and values that every earlier position of its row left in the cache.
+
+A decode step reads every weight of the model to compute one token per row, so up to a point more
+rows cost about the same time per step as one: the weights are read once for all of them. Rows
+from several prompts fill a batch where one prompt's samples alone wouldn't.
+
+Prompts of different lengths are padded on the left to the longest, so that every prompt ends at
+the same position and each step's new tokens line up in one column of the cache. The padding is
+marked in the cache, and attention skips it (post/qwen3.py). A padded prompt starts at a later
+position than it would alone, which changes nothing: with RoPE, a score depends only on how far
+apart two tokens are. Hugging Face's generate pads on the left the same way. Inference servers
+such as vLLM keep no padding at all: each sequence's keys and values live in blocks of their own,
+and a finished sequence's place goes to a new one at once (continuous batching).
 
 Shape letters used in the comments:
-    B   sequences sampled at once
-    T   prompt length
+    P   prompts
+    B   sequences sampled at once: samples of each prompt, P * samples
+    T   longest prompt length
     N   new tokens generated so far
     S   stop tokens
     V   vocabulary size
@@ -16,6 +29,7 @@ Shape letters used in the comments:
 """
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from post.qwen3 import KVCache, Qwen3
@@ -40,27 +54,45 @@ def new_caches(model: Qwen3, batch_size: int, max_len: int) -> list[KVCache]:
     ]
 
 
+def prefill(
+    model: Qwen3, prompts: list[Tensor], max_len: int, pad_id: int
+) -> tuple[Tensor, list[KVCache]]:  # P of [T_p]
+    """Read the prompts in one batch, each padded on the left to the longest with pad_id, which is
+    never attended to; return each prompt's next-token logits and the caches holding them."""
+    longest = max(prompt.size(0) for prompt in prompts)
+    device = prompts[0].device
+    lengths = torch.tensor([prompt.size(0) for prompt in prompts], device=device)  # [P]
+    slots = torch.arange(longest, device=device)  # [T]
+    real = slots >= (longest - lengths)[:, None]  # [P, T], the padding first, then the prompt
+    padded = [F.pad(prompt, (longest - prompt.size(0), 0), value=pad_id) for prompt in prompts]
+    ids = torch.stack(padded)  # [P, T]
+    caches = new_caches(model, len(prompts), max_len)
+    for cache in caches:
+        cache.real[:, :longest] = real  # [P, T] written into [P, L]
+    logits = model(ids, caches, last_only=True)  # [P, 1, V], the prompts read once
+    return logits[:, -1], caches  # [P, V]
+
+
 @torch.no_grad()
 def generate(
     model: Qwen3,
-    prompt: Tensor,
+    prompts: list[Tensor],
     samples: int,
     max_new_tokens: int,
     temperature: float,
     stop_ids: list[int],
-) -> Tensor:  # [T]
-    """Sample up to max_new_tokens tokens after the prompt, in samples rows. A row that writes one
-    of stop_ids is done: it stays in the batch, so the shapes don't change, but every token after it
-    is the first of stop_ids. Stop when every row is done."""
-    stops = torch.tensor(stop_ids, device=prompt.device)  # [S]
-    caches = new_caches(model, batch_size=1, max_len=prompt.size(0) + max_new_tokens)
-    ids = prompt.unsqueeze(0)  # [1, T]
-    logits = model(ids, caches, last_only=True)  # [1, 1, V], the prompt read once
+) -> Tensor:  # P of [T_p]
+    """Sample up to max_new_tokens tokens after each prompt, in samples rows each: prompt p's rows
+    are p * samples to (p + 1) * samples - 1. A row that writes one of stop_ids is done: it stays
+    in the batch, so the shapes don't change, but every token after it is the first of stop_ids.
+    Stop when every row is done."""
+    longest = max(prompt.size(0) for prompt in prompts)
+    stops = torch.tensor(stop_ids, device=prompts[0].device)  # [S]
+    logits, caches = prefill(model, prompts, longest + max_new_tokens, stop_ids[0])  # [P, V]
     for cache in caches:
-        cache.repeat_rows(samples)  # [1, G, L, Dh] -> [B, G, L, Dh], the prompt in every row
-    logits = logits[:, -1]  # [1, V]
-    logits = logits.expand(samples, -1)  # [B, V], every row starts from the same prediction
-    done = torch.zeros(samples, dtype=torch.bool, device=prompt.device)  # [B]
+        cache.repeat_rows(samples)  # [P, G, L, Dh] -> [B, G, L, Dh], each prompt in its rows
+    logits = logits.repeat_interleave(samples, dim=0)  # [B, V], a prompt's rows start the same
+    done = torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)  # [B]
     new_ids = []  # one [B, 1] per step
     while True:
         next_ids = sample(logits, temperature)  # [B, 1], each row draws its own
