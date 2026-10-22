@@ -378,18 +378,18 @@ Each stage starts from a problem we can see in the previous stage's output.
     - Every pass@k is a little higher, and more so at large k: 1.0 point at pass@1, 2.8 at pass@8. That's within the noise of 200 questions, but it leans the way the toy does. REINFORCE pushes up whichever right answers it happened to sample, which narrows them. The baseline pushes up only answers that beat their question's average, and pushes the others down.
     - The answers shortened less, from 110 to 98 tokens, where REINFORCE's went from 112 to 90.
     - 10.1 minutes, 15.2 seconds per step, peak 17.3 GiB: the baseline costs nothing.
-- **Ratio clipping** (done, `post/grpo.py`): sampling is most of each step, and its answers get one gradient step. Here they get 4. From the second update on, the model training on them is no longer the one that sampled them, so each answer token is weighted by its ratio, its probability now over its probability when sampled, clipped to 1 ± 0.2 in the direction its advantage pushes. On the first update every ratio is 1, and the gradient is the baseline's.
+- **GRPO: ratio clipping** (done, `post/grpo.py`): sampling is most of each step, and its answers get one gradient step. Here they get 4. From the second update on, the model training on them is no longer the one that sampled them, so each answer token is weighted by its ratio, its probability now over its probability when sampled, clipped to 1 ± 0.2 in the direction its advantage pushes. On the first update every ratio is 1, and the gradient is the baseline's.
   - The old log-probs are the trainer's own, from the first update's forward pass, where the weights are still those that sampled.
   - The loss needs each target's log-probability, not just their sum. `TokenLogProbs` in `post/linear_cross_entropy.py` returns them in chunks, and computes the logits again in the backward pass rather than keep them. The check (`post/check/loss.py`): on the same signed scales, its gradient is as close to the exact one as the plain loss's (1.5% and 1.5% over all weights).
   - No division by the group's standard deviation and no KL term, as in Dr. GRPO and DAPO. Each answer's tokens are summed, as Dr. GRPO does, where GRPO averaged them.
-  - The toy (`post/simple/ratio_clipping.py`): by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
+  - The toy (`post/simple/grpo.py`): by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
   - GSM8K (`post/eval/grpo.py`), the same start and test questions, 20 steps of 4 updates:
 
     |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
     |---|---|---|---|---|---|---|---|---|
     | REINFORCE, 40 steps | 52% | 34.2% | 47.7% | 61.0% | 72.8% | 83.0% | 34 | 7 |
     | with the baseline, 40 steps | 52% | 35.2% | 49.1% | 62.9% | 75.6% | 85.0% | 30 | 5 |
-    | ratio clipping, 20 steps × 4 updates | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
+    | GRPO, 20 steps × 4 updates | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
 
     - From half the sampled answers, 1,280 against 2,560, it goes further than either: 5.8 points at pass@1, the largest gap yet. It also took twice the gradient steps, 80 against 40.
     - 22.6 seconds per step, against the baseline's 15.2, so each extra update costs about 2.5 seconds and sampling about 13. That's why reuse pays: a gradient step on answers already sampled costs a fifth as much as sampling new ones.
