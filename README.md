@@ -27,19 +27,20 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `gpu.py` | runs modules one after another on a cloud GPU (an NVIDIA L4 on Modal), where every run goes by default |
 | `kaggle_run.py` | runs modules one after another on a free Kaggle T4, for when the month's Modal credits run out |
 | `post/ROADMAP.md` | the post-training plan: model, hardware and the stages in order |
-| `post/qwen3.py` | Qwen3 in our own code: the model, its KV cache, attention within each conversation of a packed row, and loading the released checkpoint and tokenizer from the Hugging Face Hub |
-| `post/sampler.py` | samples answers with a KV cache, several rows at once: the prompt read once and its cache copied into every row, then one token per row per step until a stop token |
+| `post/qwen3.py` | Qwen3 in our own code: the model, its KV cache, attention within each conversation of a packed row, loading the released checkpoint and tokenizer from the Hugging Face Hub, and saving trained weights for later runs |
+| `post/sampler.py` | samples answers with a KV cache, several prompts and several rows per prompt at once: the prompts padded on the left and read once, each one's cache copied into its rows, then one token per row per step until a stop token |
 | `post/gsm8k.py` | GSM8K: the data, the 4-shot prompt and two graders (strict and last number) |
-| `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, and SFT's loss over them |
+| `post/chat.py` | Qwen's chat format: a conversation as token ids and the mask of the assistant's tokens, SFT's loss over them, and the model's answers to questions asked in it, sampled 256 at a time |
 | `post/linear_cross_entropy.py` | the head fused with the cross-entropy loss, a chunk of positions at a time, with the gradients computed in the forward pass: a step's logits are never all in memory |
 | `post/sft.py` | supervised fine-tuning: a full fine-tune on GSM8K train problems mixed with everyday smol-smoltalk conversations, packed end to end into steps of up to 2,048 tokens with no padding |
 | `post/lora.py` | LoRA: the loaded weights frozen in bf16, a learned correction of rank r next to each linear layer at 10 times full fine-tuning's learning rate, and the embedding table trained in full |
 | `post/nf4.py` | NF4, QLoRA's 4-bit format: 16 levels from the normal distribution, a scale per 64 weights, the scales quantized again to 8 bits, and a matmul that dequantizes each weight on the fly, in the backward pass too |
 | `post/qlora.py` | QLoRA: LoRA with every frozen linear layer stored in NF4 |
+| `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
-| `post/check/batch.py` | checks each row of a batch gets the same logits as that row on its own, with a prompt per row and with one prompt shared by every row |
+| `post/check/batch.py` | checks each row of a batch gets the same logits as that row on its own: with a prompt per row, with one prompt shared by every row, and with prompts of different lengths padded on the left |
 | `post/check/gsm8k.py` | checks the GSM8K prompt, both graders and pass@k on cases whose results are known |
 | `post/check/chat.py` | checks the chat format's text, ids and mask, and that a prompt matches the checkpoint's own chat template |
 | `post/check/packing.py` | checks each conversation in a packed row gets the same logits as on its own, and shows what plain causal attention does instead |
@@ -56,6 +57,9 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/eval/lora.py` | runs SFT with LoRA and measures it as `post/eval/sft.py` measures full fine-tuning |
 | `post/eval/nf4.py` | the weights' memory and the held-out loss in bf16 and NF4, for Qwen3-0.6B, 1.7B and 4B |
 | `post/eval/qlora.py` | runs SFT with QLoRA and measures it as `post/eval/lora.py` measures LoRA |
+| `post/eval/pass_at_k.py` | the SFT model on GSM8K test questions in chat format: greedy accuracy, pass@1 to pass@16, and how many questions none, some or all samples get right |
+| `post/eval/rejection_sampling.py` | runs rejection sampling and measures it: the answers kept, then the retrained model as `post/eval/pass_at_k.py` measures the SFT model |
+| `post/eval/rejection_control.py` | rejection sampling's control: the same questions with GSM8K's worked solutions instead of the model's own answers, retrained and measured the same way |
 | `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
@@ -100,4 +104,4 @@ Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
 3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and RMSNorm (forward, backward and autograd) are done.
-4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT is done, with packing and the fused loss.
+4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT, LoRA and QLoRA are done; rejection sampling is next.
