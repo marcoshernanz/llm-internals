@@ -38,6 +38,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/qlora.py` | QLoRA: LoRA with every frozen linear layer stored in NF4 |
 | `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward |
 | `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
+| `post/simple/reinforce.py` | REINFORCE at its simplest, standalone: 16 completions of one prompt sampled token by token, a reward of 1 for any that says "dog", and the loss minus the mean of reward times log probability |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
