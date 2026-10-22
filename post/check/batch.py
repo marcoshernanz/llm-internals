@@ -1,9 +1,11 @@
 """
 Check batching: each row of a batch must get the same logits as that row run on its own, at every
-cached step. Two batches: rows with different prompts, read together; and rows sharing one prompt,
-read once and copied into every row, as the sampler does. After the prompt every row reads different
-random tokens, so a row that leaked into another would show. All in fp32, so any difference beyond
-rounding is a bug. Run with ``uv run modal run gpu.py --modules post.check.batch``.
+cached step. Three batches: rows with different prompts, read together; rows sharing one prompt,
+read once and copied into every row, as the sampler does; and prompts of different lengths, padded
+on the left, as the sampler reads them (post/sampler.py). After the prompt every row reads
+different random tokens, so a row that leaked into another would show. All in fp32, so any
+difference beyond rounding is a bug.
+Run with ``uv run modal run gpu.py --modules post.check.batch``.
 
 Shape letters used in the comments:
     B   rows of the batch
@@ -18,9 +20,11 @@ import torch
 from torch import Tensor
 
 from post.qwen3 import DEVICE, REPO_ID, KVCache, Qwen3, load_qwen3
-from post.sampler import new_caches
+from post.sampler import new_caches, prefill
 
 SHAPE = (4, 32)  # [B, T], the batch and its prompt length
+LENGTHS = [32, 7, 20, 1]  # the padded batch's prompt lengths: one is 25 padding slots then a token
+PAD_ID = 0  # any token: attention never reads it
 STEPS = 16  # cached steps after the prompt
 # Rounding moves the logits by about 1e-4, as in post/check/qwen3.py. One real bug, each row
 # attending over its neighbor's cached keys and values, moves them by 17.
@@ -77,6 +81,19 @@ def main() -> None:
         model(prompt, caches, last_only=True)  # [1, 1, V], each row reads the prompt itself
     largest = decode_difference(model, shared_caches, row_caches)
     print(f"one shared prompt: {batch_size} rows, largest logit difference {largest:.2e}")
+    assert largest < TOLERANCE
+
+    prompts = [torch.randint(1000, 100_000, (n,), device=DEVICE) for n in LENGTHS]  # each [T_p]
+    together, padded_caches = prefill(model, prompts, max_len, PAD_ID)  # [B, V]
+    row_caches = [new_caches(model, 1, max_len) for _ in prompts]
+    largest = 0.0
+    for b, (prompt, caches) in enumerate(zip(prompts, row_caches)):
+        alone = model(prompt[None], caches, last_only=True)  # [1, 1, V], no padding
+        largest = max(largest, (together[b] - alone[0, -1]).abs().max().item())
+    largest = max(largest, decode_difference(model, padded_caches, row_caches))
+    print(
+        f"prompts of {LENGTHS} tokens, padded on the left: largest logit difference {largest:.2e}"
+    )
     assert largest < TOLERANCE
     print("each row gets the same logits in the batch as on its own")
 
