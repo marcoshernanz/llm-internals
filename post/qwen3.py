@@ -4,6 +4,7 @@ module is named as in the checkpoint, so the checkpoint's tensors load by name.
 
 Shape letters used in the comments:
     B   batch size
+    P   prompts: a cache's rows before each is copied into its samples' rows
     T   sequence length (time): with a KV cache, the new tokens only
     S   positions the queries attend over: with a KV cache, the cached ones plus T, otherwise T
     L   positions a KV cache has room for (max_len)
@@ -30,6 +31,9 @@ from torch import Tensor, nn
 from torch.nn.attention.varlen import varlen_attn
 
 REPO_ID = "Qwen/Qwen3-0.6B-Base"  # the checkpoint we post-train
+CHECKPOINTS = Path(
+    "/checkpoints"
+)  # a Modal Volume (gpu.py): weights one run saves, later ones load
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # The checkpoint's bf16, except on a GPU that can't compute in it, such as the T4. Its fp16 is fast,
 # but a bf16 value above 65,504 overflows fp16: until we check the model stays below that, fp32.
@@ -118,7 +122,9 @@ class RMSNorm(nn.Module):
 
 class KVCache:
     """The keys and values of every position so far, for one attention layer. The buffers are
-    allocated once, for the longest sequence, and each step writes its new positions in place."""
+    allocated once, for the longest sequence, and each step writes its new positions in place.
+    Which positions hold a real token, not padding, is kept too: prompts of different lengths are
+    padded on the left to share a batch (post/sampler.py), and attention skips the padding."""
 
     def __init__(
         self,
@@ -131,6 +137,7 @@ class KVCache:
         shape = (batch_size, config.num_key_value_heads, max_len, config.head_dim)
         self.k = torch.zeros(shape, dtype=dtype, device=device)  # [B, G, L, Dh]
         self.v = torch.zeros(shape, dtype=dtype, device=device)  # [B, G, L, Dh]
+        self.real = torch.ones(batch_size, max_len, dtype=torch.bool, device=device)  # [B, L]
         self.length = 0  # positions filled so far
 
     def update(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:  # [B, G, T, Dh] each
@@ -141,12 +148,13 @@ class KVCache:
         self.v[:, :, start : self.length] = v  # [B, G, T, Dh] written into [B, G, L, Dh]
         return self.k[:, :, : self.length], self.v[:, :, : self.length]  # [B, G, S, Dh] each
 
-    def repeat_rows(self, batch_size: int) -> None:
-        """Copy a cache of one row into batch_size rows, so that samples of one prompt share its
-        keys and values without each recomputing them. Copies, not views: each row writes its own
-        new tokens after the prompt."""
-        self.k = self.k.repeat(batch_size, 1, 1, 1)  # [1, G, L, Dh] -> [B, G, L, Dh]
-        self.v = self.v.repeat(batch_size, 1, 1, 1)  # [1, G, L, Dh] -> [B, G, L, Dh]
+    def repeat_rows(self, repeats: int) -> None:
+        """Copy each row into repeats rows next to it, so that samples of one prompt share its keys
+        and values without each recomputing them. Copies, not views: each row writes its own new
+        tokens after the prompt."""
+        self.k = self.k.repeat_interleave(repeats, dim=0)  # [P, G, L, Dh] -> [B, G, L, Dh]
+        self.v = self.v.repeat_interleave(repeats, dim=0)  # [P, G, L, Dh] -> [B, G, L, Dh]
+        self.real = self.real.repeat_interleave(repeats, dim=0)  # [P, L] -> [B, L]
 
 
 class Packing:
@@ -161,15 +169,26 @@ class Packing:
         self.positions = torch.cat(positions).to(device)  # [T], as each would have alone
 
 
-def attend(q: Tensor, k: Tensor, v: Tensor, scale: float) -> Tensor:  # [B, H, T, Dh], [B, G, S, Dh]
+def attend(
+    q: Tensor, k: Tensor, v: Tensor, scale: float, real: Tensor | None = None
+) -> Tensor:  # [B, H, T, Dh], [B, G, S, Dh], [B, G, S, Dh], [B, S]
     """Causal attention of T new queries over S keys, the last T of which belong to the new tokens.
     One fused kernel: each query head reads its group's key-value head where it lies, with no
-    copy per query head, and the scores never leave the chip."""
+    copy per query head, and the scores never leave the chip. real says which of the S positions
+    hold a token, not padding: a token's query sees only real keys. A padding query sees every key
+    before it: its output is never used, but a query that sees no key at all comes out NaN, and a
+    NaN value spreads to every query, since a weight of 0 times NaN is NaN."""
     cached = k.size(2) - q.size(2)  # positions before the new tokens, 0 without a cache
-    causal = torch.ones(q.size(2), k.size(2), dtype=torch.bool, device=q.device)  # [T, S]
-    causal = causal.tril(diagonal=cached)  # [T, S], new token t sees keys 0..cached+t
+    mask = torch.ones(q.size(2), k.size(2), dtype=torch.bool, device=q.device)  # [T, S]
+    mask = mask.tril(diagonal=cached)  # [T, S], new token t sees keys 0..cached+t
+    if real is not None:
+        keys = real[:, None, :]  # [B, 1, S], the real keys
+        padding = ~real[:, cached:, None]  # [B, T, 1], the queries that are padding
+        visible = keys | padding  # [B, T, S]
+        mask = mask & visible  # [B, T, S]
+        mask = mask[:, None]  # [B, 1, T, S], the same for every head
     return F.scaled_dot_product_attention(
-        q, k, v, attn_mask=causal, scale=scale, enable_gqa=True
+        q, k, v, attn_mask=mask, scale=scale, enable_gqa=True
     )  # [B, H, T, Dh]
 
 
@@ -242,11 +261,13 @@ class Attention(nn.Module):
         v = v.unflatten(-1, (self.num_kv_heads, self.head_dim))  # [B, T, G, Dh]
         v = v.transpose(1, 2)  # [B, G, T, Dh]
 
+        real = None  # without a cache there's no padding
         if cache is not None:
             k, v = cache.update(k, v)  # [B, G, S, Dh] each, the cached positions then the new
+            real = cache.real[:, : cache.length]  # [B, S]
 
         if packing is None:
-            o = attend(q, k, v, self.softmax_scale)  # [B, H, T, Dh]
+            o = attend(q, k, v, self.softmax_scale, real)  # [B, H, T, Dh]
         else:
             o = attend_packed(q, k, v, packing, self.softmax_scale)  # [1, H, T, Dh]
         o = o.transpose(1, 2)  # [B, T, H, Dh]
@@ -346,6 +367,18 @@ def load_qwen3(repo_id: str, dtype: torch.dtype, device: str) -> Qwen3:
     # strict: every tensor must fill a parameter, and back; assign: the tensors become them
     model.load_state_dict(weights, assign=True)
     return model.to(device=device, dtype=dtype)
+
+
+def save_weights(model: Qwen3, name: str) -> None:
+    """Save the model's weights to CHECKPOINTS in bf16, as the released checkpoints come."""
+    weights = {key: weight.to(torch.bfloat16) for key, weight in model.state_dict().items()}
+    torch.save(weights, CHECKPOINTS / f"{name}.pt")
+
+
+def load_weights(model: Qwen3, name: str) -> None:
+    """Replace the model's weights with ones save_weights saved, in the model's own dtype."""
+    weights = torch.load(CHECKPOINTS / f"{name}.pt", map_location=model.embed_tokens.weight.device)
+    model.load_state_dict(weights)  # copies each tensor into its parameter
 
 
 def load_tokenizer(repo_id: str) -> Tokenizer:
