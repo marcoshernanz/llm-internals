@@ -24,6 +24,12 @@ computed, so the gradient coming back into it is a single number, 1 unless the l
 backward pass only multiplies by it.
 Matmuls in bf16, as autocast runs them; the softmax in fp32.
 
+GRPO's clipped loss (post/grpo.py) needs each target's log probability itself, since it weights
+each token by how far its probability has moved, so the gradient can't be computed before the loss
+is. TokenLogProbs returns them, a chunk at a time, and keeps no logits: the backward pass computes
+each chunk's logits again, one more matmul, and from the gradient coming into each log probability
+g, the logits' gradient, g (onehot(y) - softmax(z)).
+
 Shape letters used in the comments:
     A   positions whose target counts
     C   positions in a chunk, CHUNK or fewer in the last
@@ -84,3 +90,48 @@ class LinearCrossEntropy(torch.autograd.Function):
         if grad_weight is not None:
             grad_weight = grad_weight * grad_loss  # [V, D]
         return grad_hidden * grad_loss, grad_weight, None, None  # targets and scales get none
+
+
+class TokenLogProbs(torch.autograd.Function):
+    """Each target's log probability with the head W, a chunk of positions at a time."""
+
+    @staticmethod
+    def forward(ctx: Any, hidden: Tensor, weight: Tensor, targets: Tensor) -> Tensor:
+        # [A, D], [V, D], [A]
+        count = targets.size(0)
+        weight16 = weight.to(torch.bfloat16)  # [V, D]
+        log_probs = torch.empty(count, device=hidden.device)  # [A], fp32
+        for start in range(0, count, CHUNK):
+            end = min(start + CHUNK, count)
+            h = hidden[start:end].to(torch.bfloat16)  # [C, D]
+            y = targets[start:end]  # [C]
+            rows = torch.arange(end - start, device=hidden.device)  # [C]
+            z = (h @ weight16.T).float()  # [C, V], the chunk's logits, the softmax in fp32
+            log_probs[start:end] = z[rows, y] - z.logsumexp(dim=-1)  # [C]
+        ctx.save_for_backward(hidden, weight, targets)
+        return log_probs
+
+    @staticmethod
+    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None]:
+        (grad_log_probs,) = grad_outputs  # [A], the gradient coming into each log probability
+        hidden, weight, targets = ctx.saved_tensors  # [A, D], [V, D], [A]
+        count = targets.size(0)
+        weight16 = weight.to(torch.bfloat16)  # [V, D]
+        grad_hidden = torch.empty_like(hidden)  # [A, D]
+        grad_weight = None  # [V, D]: the chunks' sum, if the head trains
+        if ctx.needs_input_grad[1]:
+            grad_weight = torch.zeros_like(weight, dtype=torch.float32)  # [V, D]
+        for start in range(0, count, CHUNK):
+            end = min(start + CHUNK, count)
+            h = hidden[start:end].to(torch.bfloat16)  # [C, D]
+            y = targets[start:end]  # [C]
+            rows = torch.arange(end - start, device=hidden.device)  # [C]
+            z = (h @ weight16.T).float()  # [C, V], the chunk's logits again
+            z = z.softmax(dim=-1)  # [C, V]
+            z[rows, y] -= 1  # [C, V], softmax - onehot: minus each log probability's dz
+            z *= -grad_log_probs[start:end, None]  # [C, V], the logits' gradient
+            grad_z = z.to(torch.bfloat16)  # [C, V]
+            grad_hidden[start:end] = grad_z @ weight16  # [C, D]
+            if grad_weight is not None:
+                grad_weight += grad_z.T @ h  # [V, D]
+        return grad_hidden, grad_weight, None  # targets get none
