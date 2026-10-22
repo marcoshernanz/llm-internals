@@ -12,7 +12,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 | 1 | SFT | Done |
 | 2 | LoRA, then QLoRA | Done |
 | 3 | Rejection sampling | Done |
-| 4 | RL with verifiable rewards | Not started |
+| 4 | RL with verifiable rewards | In progress |
 | 5 | Multi-turn environments and tools | Not started |
 | 6 | Learned rewards: reward model, RLHF, DPO | Not started |
 | 7 | On-policy distillation | Not started |
@@ -341,8 +341,32 @@ Each stage starts from a problem we can see in the previous stage's output.
   - pass@1 and pass@k on held-out sets.
   - The random-reward control.
   - A rank-1 LoRA run.
+- **Re-ranked by what each step teaches** (2026-10-22):
+  - The IFEval-style graders first: skipped. They came first because their reward is non-zero from step one, and our SFT model already gets 25% of GSM8K at temperature 1.
+  - The environment interface: deferred to stage 5, when there's a second task.
+  - Per-token log-probs from the sampler: deferred until ratio clipping or the sampler-trainer mismatch needs them.
+  - The KL term: GRPO starts without it, as DAPO and Dr. GRPO do. DeepSeek V3.2 keeps a corrected KL instead.
+- **REINFORCE** (done, `post/reinforce.py`):
+  - Each step, the model answers 8 GSM8K train questions SFT never read, 8 samples each at temperature 1.
+  - Reward: 1 if the answer closed its turn and is right by strict grading, 0 if not.
+  - Loss: minus each answer's summed token log-probabilities times its reward, averaged over the step's 64 answers.
+  - The answers are sampled by a bf16 copy of the model, refreshed from the trained fp32 weights before each step. Their token ids go to the loss as sampled, never decoded and encoded again.
+  - The fused loss now takes a scale per target, the answer's reward, where SFT passes 1/A. The check (`post/check/loss.py`): with signed scales per conversation, its gradient is as close to the exact one as the plain loss's (1.6% and 1.5% over all weights).
+  - Constant learning rate 2e-6, 40 steps, 15.8 seconds per step, peak 17.3 GiB.
+- **What REINFORCE changed** (`post/eval/reinforce.py`, the same 200 test questions, 16 samples each, strict):
+
+  |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+  |---|---|---|---|---|---|---|---|---|
+  | SFT | 50% | 25.3% | 38.2% | 52.1% | 65.0% | 76.0% | 48 | 1 |
+  | rejection sampling | 51% | 29.0% | 42.4% | 56.0% | 68.9% | 80.5% | 39 | 2 |
+  | REINFORCE, 40 steps | 52% | 34.2% | 47.7% | 61.0% | 72.8% | 83.0% | 34 | 7 |
+
+  - In 40 steps, 2,560 sampled answers, it goes further than a round of rejection sampling, which sampled 3,072 and trained the base model again. Each step learns from answers the current model wrote.
+  - The training reward, over 5 steps at a time: 0.287, 0.300, 0.322, 0.425, 0.353, 0.438, 0.341, 0.366. Each window has different questions, so it's noisy.
+  - The answers got shorter, 112 tokens on average to 90, and more of them close their turn: 98%, from 93%. An answer that runs to the token limit gets no reward.
+  - With rewards of 1 and 0, every wrong answer gets weight 0: at a reward of about 0.35, two thirds of each step's sampled answers teach nothing. That's the next problem: a baseline.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
-- **Runs on:** Kaggle. Each fix runs on one card next to its baseline on the other.
+- **Runs on:** Modal L4, while the credits last.
 
 ### 5. Multi-turn environments and tools
 
