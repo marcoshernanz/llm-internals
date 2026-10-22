@@ -10,8 +10,8 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 |---|---|---|
 | 0 | Foundations: Qwen3 in our own code, a KV-cache sampler, graders | Done |
 | 1 | SFT | Done |
-| 2 | LoRA, then QLoRA | In progress |
-| 3 | Rejection sampling | Not started |
+| 2 | LoRA, then QLoRA | Done |
+| 3 | Rejection sampling | Done |
 | 4 | RL with verifiable rewards | Not started |
 | 5 | Multi-turn environments and tools | Not started |
 | 6 | Learned rewards: reward model, RLHF, DPO | Not started |
@@ -260,6 +260,10 @@ Each stage starts from a problem we can see in the previous stage's output.
     | Qwen3-4B-Base | out of memory | out of memory | out of memory, in step 2's forward pass |
 
   - Why 4B still doesn't fit: the embedding table, trained in full. Its 389M weights take 16 bytes each (fp32 weight, gradient, AdamW's two moments): 5.8 GiB. The fused loss adds its fp32 gradient while the backward pass waits, 1.45 GiB, and that is the allocation that fails.
+- **Closed here,** with what's left ranked by what it would teach:
+  - Fitting 4B, by training only the two chat tokens' rows (PEFT's trainable tokens): skipped. It's plumbing, and its lesson, rows a base model never trained, was learned when LoRA wouldn't stop.
+  - The 8B teacher in NF4: moved to stage 6, the first stage that needs it. It takes a loader for a head apart from the embedding table.
+  - A kernel that reads the 4-bit weights inside the matmul: left to the kernels track. Its problem is measured above: generation twice as slow in NF4.
 - **Frontier:** practitioner tools. The labs fine-tune fully. LoRA appears in RL research, where rank 1 is enough.
 - **Runs on:** Modal L4.
 
@@ -268,8 +272,46 @@ Each stage starts from a problem we can see in the previous stage's output.
 - **Problem:** the SFT model's pass@8 is far above its pass@1. The right answer is in there; it just doesn't pick it.
 - **Build:** sample 8 answers per problem, keep the verified ones, fine-tune on them, repeat.
 - **Check:** pass@1 climbs toward the old pass@8, while pass@8 itself barely moves.
+- **The problem, seen** (`post/eval/pass_at_k.py`, the SFT model on the first 200 GSM8K test questions, zero-shot in chat format; 16 samples each at temperature 1):
+
+  |  | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 |
+  |---|---|---|---|---|---|
+  | strict | 25.3% | 38.2% | 52.1% | 65.0% | 76.0% |
+  | last number | 25.6% | 38.6% | 52.5% | 65.4% | 76.5% |
+
+  - One sample is right a quarter of the time, but 8 include a right one for 65% of the questions. 151 of the 200 questions have some samples right and some wrong; 48 have none right, 1 has all.
+  - Greedy, the same model gets 50% right. Temperature 1 spreads probability onto wrong steps, and over a hundred tokens they add up.
+  - 93% of samples close their turn.
+- **Batched sampling** (done, `post/sampler.py`): 3,200 answers needed more than one question per batch. Prompts of different lengths are padded on the left, so every row's next token lands in the same slot, and attention skips the padding. With RoPE, starting later changes no score. A padding query sees every key before it, since one that sees none comes out NaN and spreads.
+  - The check (`post/check/batch.py`): prompts of 32, 7, 20 and 1 tokens padded together get each prompt's own logits, to 2.4e-4 in fp32.
+  - 200 greedy answers took 0.3 minutes, all in one batch. One at a time, 50 took 3.9 (`post/eval/sft.py`).
+  - 3,200 sampled answers took 3.8 minutes: about 68 ms per step at 256 rows. The batch runs until its longest answer ends, usually at the 256-token limit. Inference servers refill a finished row with a new prompt instead (continuous batching).
+- **Weights kept between runs:** `post.sft` saves its weights to a Modal Volume, and later stages load them (`post/qwen3.py`, `gpu.py`).
+- **Rejection sampling** (done, `post/rejection_sampling.py`): one round.
+  - The SFT model answers 384 GSM8K train questions SFT never read, 8 samples each at temperature 1. Only each question's final number is used, never its worked solution.
+  - Kept: answers that closed their turn and are right by strict grading. Exact repeats are dropped, and at most 4 are kept per question, as ReST-EM caps them.
+  - Then the base model is fine-tuned again from the start, on SFT's conversations plus the kept ones, with SFT's recipe. STaR, ReST-EM and DeepSeek R1 do this. The alternative is to go on training the SFT model on the new answers alone, as Qwen3 does in its later SFT stages.
+  - Sampling took 3.7 minutes. 294 of the 384 questions got an answer kept, and 115 of those got the full 4: 802 answers, 118K tokens with their questions.
+- **What it changed** (`post/eval/rejection_sampling.py`, the same 200 test questions, 16 samples each), with a control (`post/eval/rejection_control.py`): the same 384 questions with GSM8K's worked solutions instead of the model's answers.
+
+  |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right |
+  |---|---|---|---|---|---|---|---|
+  | SFT | 50% | 25.3% | 38.2% | 52.1% | 65.0% | 76.0% | 48 |
+  | rejection sampling | 51% | 29.0% | 42.4% | 56.0% | 68.9% | 80.5% | 39 |
+  | control: worked solutions | 50% | 25.3% | 37.9% | 51.2% | 64.0% | 76.0% | 48 |
+
+  All by strict grading. Each run took 8 to 12 minutes on the L4, about $0.15.
+  - The control changes nothing, so the gain didn't come from more questions. It came from the model's own right answers. Two likely reasons, which these runs don't separate:
+    - Its own answers are written the way it already writes, so training on them raises the probability of paths it can already take.
+    - It got up to 4 different right answers per question, against one worked solution: 118K tokens against 62K.
+  - pass@1 rose by 3.7 points, but pass@8 rose about as much (3.9), and 9 more questions now have a right sample. The plan expected pass@1 to climb while pass@8 stayed put. At our scale it moved everything up.
+  - Greedy barely moved (50% to 51%). Most of the gain is at temperature 1, where wrong steps had the most probability.
+- **Skipped:** a second round. It repeats the first with the new model, for a smaller gain, and teaches nothing new.
+- **Left for stage 4:**
+  - The 39 questions with no right sample give rejection sampling nothing to keep.
+  - Every wrong answer is thrown away, though it shows what not to do.
 - **Frontier:** DeepSeek R1 (~800k samples), every round of Llama 3, and Qwen3. It's also the oldest form of self-distillation.
-- **Runs on:** Kaggle.
+- **Runs on:** Modal L4.
 
 ### 4. RL with verifiable rewards
 
@@ -321,7 +363,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   1. A reward model: the SFT model plus a scalar output, trained on HelpSteer2 preference pairs (Bradley-Terry).
   2. Plug it into the stage-4 loop and watch reward hacking: answers get longer and the reward rises while quality drops.
   3. DPO on UltraFeedback: the same preferences, with no reward model and no sampling.
-  4. A rubric judge: the 8B teacher grading answers.
+  4. A rubric judge: the 8B teacher grading answers. First, from stage 2: the loader takes 8B's head, a matrix apart from the embedding table, and its weights go to NF4.
 - **Frontier:** split.
   - Ai2 and Meta keep DPO: OLMo 3 runs it before RL, and Llama 4 runs a light pass at the end.
   - The Chinese labs have no preference stage. They score answers inside RL with generative judges and rubrics; in DeepSeek V4 the judge is the policy itself.
