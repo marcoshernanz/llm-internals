@@ -22,8 +22,8 @@ def reward(text: str) -> float:
     return 1.0 if "dog" in text else 0.0
 
 
-def sample(model: Qwen3, prompt: Tensor) -> Tensor:  # [P]
-    ids = prompt.repeat(SAMPLES, 1)  # [N, P]
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
+    ids = prompt.repeat(samples, 1)  # [N, P]
     for _ in range(NEW_TOKENS):
         logits = model(ids)[:, -1]  # [N, V]
         probs = logits.softmax(dim=-1)  # [N, V]
@@ -51,7 +51,7 @@ def main() -> None:
 
     for step in range(STEPS):
         with torch.no_grad():
-            ids = sample(model, prompt)  # [N, T]
+            ids = sample(model, prompt, SAMPLES)  # [N, T]
         texts = [tokenizer.decode(row) for row in ids[:, len(prompt) :].tolist()]
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
 
