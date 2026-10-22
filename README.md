@@ -36,12 +36,13 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/lora.py` | LoRA: the loaded weights frozen in bf16, a learned correction of rank r next to each linear layer at 10 times full fine-tuning's learning rate, and the embedding table trained in full |
 | `post/nf4.py` | NF4, QLoRA's 4-bit format: 16 levels from the normal distribution, a scale per 64 weights, the scales quantized again to 8 bits, and a matmul that dequantizes each weight on the fly, in the backward pass too |
 | `post/qlora.py` | QLoRA: LoRA with every frozen linear layer stored in NF4 |
-| `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward |
+| `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward, or, with the baseline, times the reward minus its question's mean |
 | `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
 | `post/simple/sft.py` | SFT at its simplest: six chat conversations, the loss on the assistant's tokens only, and a new question answered before and after |
 | `post/simple/lora.py` | LoRA at its simplest: every linear layer frozen with a trained low-rank correction next to it, taught four made-up facts |
 | `post/simple/nf4.py` | NF4 at its simplest: each block of 64 weights as indices into 16 normal-quantile levels and a scale, the scales quantized again; the model's loss before and after |
 | `post/simple/qlora.py` | QLoRA at its simplest: the LoRA of `post/simple/lora.py` on linear layers stored in NF4 and dequantized in each forward pass |
+| `post/simple/baseline.py` | REINFORCE with a baseline at its simplest: `post/simple/reinforce.py` with each reward minus the group's mean reward, so wrong samples are pushed down and a group with equal rewards pushes nothing |
 | `post/simple/rejection_sampling.py` | rejection sampling at its simplest: sample 64 completions, keep the ones the reward accepts, fine-tune on them, repeat |
 | `post/simple/pass_at_k.py` | pass@k at its simplest: 32 samples for each of four prompts, and the chance that k of them include a right one |
 | `post/simple/reinforce.py` | REINFORCE at its simplest, standalone: 16 completions of one prompt sampled token by token, a reward of 1 for any that says "dog", and the loss minus the mean of reward times log probability |
@@ -69,6 +70,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/eval/rejection_sampling.py` | runs rejection sampling and measures it: the answers kept, then the retrained model as `post/eval/pass_at_k.py` measures the SFT model |
 | `post/eval/rejection_control.py` | rejection sampling's control: the same questions with GSM8K's worked solutions instead of the model's own answers, retrained and measured the same way |
 | `post/eval/reinforce.py` | runs REINFORCE from the SFT model and measures it: the reward every 5 steps, then pass@k as `post/eval/pass_at_k.py` measures the SFT model |
+| `post/eval/baseline.py` | runs REINFORCE with the baseline, each reward minus its question's mean, and measures it as `post/eval/reinforce.py` measures REINFORCE without it |
 | `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
