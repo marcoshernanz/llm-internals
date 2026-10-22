@@ -9,7 +9,7 @@
 - Learn problem-first and bottom-up: start from a problem we can see, understand why it happens, then build the fix and check the problem is gone.
 - Explain GPUs with one NVIDIA datacenter GPU as the reference and its real numbers (the H100), not ranges across chips. Mention a newer NVIDIA GPU only where it differs in a big way. No other vendors, no legacy designs.
 - Keep the model to its core, listed in `README.md`. Don't add mechanisms unless asked.
-- Keep code simple and uncluttered: one step per line, at most one dimension change per line, a shape comment on every tensor line, and a docstring of shape letters at the top of model files.
+- Keep code simple and uncluttered, written to be read. Give each meaningful quantity its own line and name, so the computation reads step by step. Fold into that line a step that only selects or reshapes, and keep a formula on one line rather than naming its pieces. A shape comment on every tensor line, and a docstring of shape letters at the top of model files.
 - `core/` is the active model. `deepseek_v41_flash/` is the earlier reimplementation of DeepSeek-V4.1-Flash, kept frozen for reference.
 - After every code change, run `uv run ruff format . && uv run ruff check . && uv run ty check` and fix every error before reporting back. ty is the only type checker.
 - Don't commit. The user commits.
