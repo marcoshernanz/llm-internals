@@ -44,7 +44,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/simple/nf4.py` | NF4 at its simplest: each block of 64 weights as indices into 16 normal-quantile levels and a scale, the scales quantized again; the model's loss before and after |
 | `post/simple/qlora.py` | QLoRA at its simplest: the LoRA of `post/simple/lora.py` on linear layers stored in NF4 and dequantized in each forward pass |
 | `post/simple/baseline.py` | REINFORCE with a baseline at its simplest: `post/simple/reinforce.py` with each reward minus the group's mean reward, so wrong samples are pushed down and a group with equal rewards pushes nothing |
-| `post/simple/ratio_clipping.py` | ratio clipping at its simplest: each batch of samples reused for 4 updates, each token weighted by the ratio of its new probability to its old one, clipped to 1 ± 0.2; run clipped and not clipped |
+| `post/simple/grpo.py` | GRPO at its simplest: `post/simple/baseline.py` with each batch of samples reused for 4 updates, each token weighted by the ratio of its new probability to its old one, clipped to 1 ± 0.2; run clipped and not clipped |
 | `post/simple/rejection_sampling.py` | rejection sampling at its simplest: sample 64 completions, keep the ones the reward accepts, fine-tune on them, repeat |
 | `post/simple/pass_at_k.py` | pass@k at its simplest: 32 samples for each of four prompts, and the chance that k of them include a right one |
 | `post/simple/reinforce.py` | REINFORCE at its simplest, standalone: 16 completions of one prompt sampled token by token, a reward of 1 for any that says "dog", and the loss minus the mean of reward times log probability |
