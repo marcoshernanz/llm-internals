@@ -4,7 +4,7 @@ The weights and AdamW's two moments stay in memory throughout, 12 bytes per weig
 of them, during a step: the gradients, 4 bytes per weight; the activations the backward pass needs;
 and the logits, a row of V = 151,936 scores for every position. Each step runs three ways: with a
 stand-in loss on the hidden states, which skips the head and so has no logits; with the plain loss,
-every position's logits at once (post/check/loss.py); and with SFT's loss, the head fused with the
+every position's logits at once, as SFT computed it before; and with SFT's loss, the head fused with the
 loss a chunk at a time (post/linear_cross_entropy.py). The difference from the first is what the
 logits cost. Each step is one conversation of random tokens, every target counted: memory depends
 only on the length. A step too big for the GPU is caught and reported.
@@ -18,16 +18,28 @@ Shape letters used in the comments:
 from collections.abc import Callable
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from post.chat import sft_loss
-from post.check.loss import plain_loss
 from post.qwen3 import DEVICE, DTYPE, REPO_ID, Packing, Qwen3, load_qwen3
 
 STEP_TOKENS = [1_024, 2_048, 4_096]
 GIB = 2**30
+IGNORE = -100  # a target cross_entropy skips: left out of the sum and of the count
 
 Loss = Callable[[Qwen3, Tensor, Tensor, Packing], Tensor]
+
+
+def plain_loss(model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing) -> Tensor:  # [1, T] each
+    """SFT's loss computed plainly: the logits of every position at once, then cross-entropy."""
+    targets = ids[:, 1:]  # [1, T-1]
+    targets = targets.masked_fill(~mask[:, 1:], IGNORE)  # [1, T-1], only the assistant's count
+    logits = model(ids, packing=packing)  # [1, T, V]
+    logits = logits[:, :-1]  # [1, T-1, V], the last token has no target
+    logits = logits.flatten(0, 1)  # [T-1, V]
+    targets = targets.flatten()  # [T-1]
+    return F.cross_entropy(logits.float(), targets, ignore_index=IGNORE)
 
 
 def body_only(model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing) -> Tensor:  # [1, T] each
