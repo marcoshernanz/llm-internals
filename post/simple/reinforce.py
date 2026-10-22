@@ -25,8 +25,7 @@ def reward(text: str) -> float:
 def sample(model: Qwen3, prompt: Tensor) -> Tensor:  # [P]
     ids = prompt.repeat(SAMPLES, 1)  # [N, P]
     for _ in range(NEW_TOKENS):
-        logits = model(ids)  # [N, T, V]
-        logits = logits[:, -1]  # [N, V]
+        logits = model(ids)[:, -1]  # [N, V]
         probs = logits.softmax(dim=-1)  # [N, V]
         next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
         ids = torch.cat([ids, next_ids], dim=1)  # [N, T]
@@ -36,8 +35,7 @@ def sample(model: Qwen3, prompt: Tensor) -> Tensor:  # [P]
 def log_prob(model: Qwen3, ids: Tensor, prompt_len: int) -> Tensor:  # [N, T]
     logits = model(ids[:, :-1])  # [N, T-1, V]
     log_probs = logits.log_softmax(dim=-1)  # [N, T-1, V]
-    targets = ids[:, 1:]  # [N, T-1]
-    targets = targets.unsqueeze(-1)  # [N, T-1, 1]
+    targets = ids[:, 1:, None]  # [N, T-1, 1]
     picked = log_probs.gather(-1, targets)  # [N, T-1, 1]
     picked = picked.squeeze(-1)  # [N, T-1]
     picked = picked[:, prompt_len - 1 :]  # [N, T-P]
@@ -58,8 +56,7 @@ def main() -> None:
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
 
         log_probs = log_prob(model, ids, len(prompt))  # [N]
-        weighted = rewards * log_probs  # [N]
-        loss = -weighted.mean()
+        loss = -(rewards * log_probs).mean()
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
