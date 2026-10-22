@@ -1,7 +1,10 @@
 """
-Check SFT's loss, the head fused with cross-entropy a chunk at a time (post/linear_cross_entropy.py),
+Check the loss, the head fused with cross-entropy a chunk at a time (post/linear_cross_entropy.py),
 against the plain loss: every position's logits at once, then cross-entropy over the counted
-targets, as SFT computed it before. Neither is exact. Both run the head's matmuls in bf16, which
+targets, as SFT computed it before. Twice: with SFT's scales, 1/A on every target, for the mean;
+and with each conversation's targets scaled by a random number from -1 to 1, over the number of
+conversations, as REINFORCE scales each answer by its reward (post/reinforce.py), and as a
+baseline makes some scales negative. Neither is exact. Both run the head's matmuls in bf16, which
 keeps about 3 significant digits, and they round in different places: the fused loss rounds the
 head's gradient once per chunk, the plain one once. Their gradients differ by up to 2% for a weight.
 So each is measured against the exact gradient, with the head and the cross-entropy in fp32, and the
@@ -23,31 +26,38 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from post.chat import gsm8k_chat, render, sft_loss
+from post.chat import gsm8k_chat, render, scaled_loss
 from post.gsm8k import load_gsm8k
 from post.linear_cross_entropy import CHUNK
 from post.qwen3 import DEVICE, REPO_ID, Packing, Qwen3, load_qwen3, load_tokenizer
 
 CONVERSATIONS = 12  # the first GSM8K test problems
-IGNORE = -100  # a target cross_entropy skips: left out of the sum and of the count
-LOSS_TOLERANCE = 1e-3  # all three compute it in fp32, two of them from bf16 logits
+# All three compute it in fp32, two of them from bf16 logits, which move each target's loss by
+# about 5e-4, mostly the same way. So the sum's error grows with the scales' total size: for SFT's
+# mean, a total of 1, the loss is 4.5e-4 off; with signed scales of total 37.8, 0.03
+LOSS_TOLERANCE = 1e-3  # per unit of the scales' total size
 RATIO = 2.0  # how much further from the exact gradient the fused loss may be than the plain one
 
-Loss = Callable[[Qwen3, Tensor, Tensor, Packing], Tensor]
+Loss = Callable[[Qwen3, Tensor, Tensor, Tensor, Packing], Tensor]
 
 
-def plain_loss(model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing) -> Tensor:  # [1, T] each
+def plain_loss(
+    model: Qwen3, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing
+) -> Tensor:  # [1, T], [1, T], [A]
     """The loss computed plainly: the logits of every position at once, then cross-entropy."""
-    targets = ids[:, 1:]  # [1, T-1]
-    targets = targets.masked_fill(~mask[:, 1:], IGNORE)  # [1, T-1], only the assistant's count
     logits = model(ids, packing=packing)  # [1, T, V]
     logits = logits[:, :-1]  # [1, T-1, V], the last token has no target
-    logits = logits.flatten(0, 1)  # [T-1, V]
-    targets = targets.flatten()  # [T-1]
-    return F.cross_entropy(logits.float(), targets, ignore_index=IGNORE)
+    targets = ids[:, 1:]  # [1, T-1]
+    counted = mask[:, 1:]  # [1, T-1], only the assistant's count
+    logits = logits[counted]  # [A, V]
+    targets = targets[counted]  # [A]
+    losses = F.cross_entropy(logits.float(), targets, reduction="none")  # [A]
+    return (scales * losses).sum()
 
 
-def exact_loss(model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing) -> Tensor:  # [1, T] each
+def exact_loss(
+    model: Qwen3, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing
+) -> Tensor:  # [1, T], [1, T], [A]
     """The loss with the head and the cross-entropy in fp32; the body as SFT runs it."""
     hidden = model.hidden(ids, packing=packing)  # [1, T, D], fp32
     hidden = hidden[:, :-1]  # [1, T-1, D]
@@ -57,15 +67,16 @@ def exact_loss(model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing) -> Ten
     targets = targets[counted]  # [A]
     with torch.autocast(DEVICE, enabled=False):  # the head's matmul in fp32 too
         logits = hidden @ model.embed_tokens.weight.T  # [A, V]
-    return F.cross_entropy(logits, targets)
+    losses = F.cross_entropy(logits, targets, reduction="none")  # [A]
+    return (scales * losses).sum()
 
 
 def gradients(
-    model: Qwen3, loss_fn: Loss, ids: Tensor, mask: Tensor, packing: Packing
+    model: Qwen3, loss_fn: Loss, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing
 ) -> tuple[float, dict[str, Tensor]]:
     """The loss, and the gradient of every weight, by name."""
     with torch.autocast(DEVICE, dtype=torch.bfloat16):
-        loss = loss_fn(model, ids, mask, packing)
+        loss = loss_fn(model, ids, mask, scales, packing)
     loss.backward()
     grads = {}
     for name, weight in model.named_parameters():
@@ -91,27 +102,16 @@ def errors(grads: dict[str, Tensor], exact: dict[str, Tensor]) -> dict[str, floa
     return result
 
 
-def main() -> None:
-    tokenizer = load_tokenizer(REPO_ID)
-    model = load_qwen3(REPO_ID, torch.float32, DEVICE)  # fp32 weights, as SFT trains them
-    problems = load_gsm8k("test")[:CONVERSATIONS]
-    chats = [render(tokenizer, gsm8k_chat(problem)) for problem in problems]
-    ids = torch.tensor([[t for chat_ids, _ in chats for t in chat_ids]], device=DEVICE)  # [1, T]
-    mask = torch.tensor([[m for _, chat_mask in chats for m in chat_mask]], device=DEVICE)  # [1, T]
-    packing = Packing([len(chat_ids) for chat_ids, _ in chats], DEVICE)
-    counted = int(mask[:, 1:].sum().item())
-    print(
-        f"{CONVERSATIONS} conversations packed into {ids.size(1)} tokens, {counted} targets "
-        f"counted: chunks of {CHUNK}"
-    )
-    assert counted > CHUNK, "more than one chunk, to check the chunks add up"
-
-    exact, exact_grads = gradients(model, exact_loss, ids, mask, packing)
-    plain, grads = gradients(model, plain_loss, ids, mask, packing)
+def compare(model: Qwen3, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing) -> None:
+    """Print each loss and its gradient's errors against the exact one; assert the fused loss is
+    about as close as the plain one."""
+    exact, exact_grads = gradients(model, exact_loss, ids, mask, scales, packing)
+    plain, grads = gradients(model, plain_loss, ids, mask, scales, packing)
     plain_errors = errors(grads, exact_grads)
-    fused, grads = gradients(model, sft_loss, ids, mask, packing)
+    fused, grads = gradients(model, scaled_loss, ids, mask, scales, packing)
     fused_errors = errors(grads, exact_grads)
-    print(f"loss: exact {exact:.5f}, plain {plain:.5f}, fused {fused:.5f}")
+    size = scales.abs().sum().item()  # the scales' total size
+    print(f"loss: exact {exact:.5f}, plain {plain:.5f}, fused {fused:.5f}; scales' size {size:.1f}")
 
     print("each gradient's error, relative: |grad - exact| / |exact|")
     print(f"  {'':<34} {'plain':>8} {'fused':>8}")
@@ -128,10 +128,37 @@ def main() -> None:
     print(f"  the largest, plain: {worst_plain} {plain_errors[worst_plain]:.1e}")
     print(f"  the largest, fused: {worst_fused} {fused_errors[worst_fused]:.1e}")
 
-    assert abs(fused - exact) < LOSS_TOLERANCE
+    assert abs(fused - exact) < LOSS_TOLERANCE * size
     assert fused_errors["all"] < RATIO * plain_errors["all"]
     assert fused_errors[worst_fused] < RATIO * plain_errors[worst_plain]
-    print("the fused loss is as close to the exact gradient as the plain loss")
+
+
+def main() -> None:
+    torch.manual_seed(0)
+    tokenizer = load_tokenizer(REPO_ID)
+    model = load_qwen3(REPO_ID, torch.float32, DEVICE)  # fp32 weights, as SFT trains them
+    problems = load_gsm8k("test")[:CONVERSATIONS]
+    chats = [render(tokenizer, gsm8k_chat(problem)) for problem in problems]
+    ids = torch.tensor([[t for chat_ids, _ in chats for t in chat_ids]], device=DEVICE)  # [1, T]
+    mask = torch.tensor([[m for _, chat_mask in chats for m in chat_mask]], device=DEVICE)  # [1, T]
+    packing = Packing([len(chat_ids) for chat_ids, _ in chats], DEVICE)
+    counted = int(mask[:, 1:].sum().item())
+    print(
+        f"{CONVERSATIONS} conversations packed into {ids.size(1)} tokens, {counted} targets "
+        f"counted: chunks of {CHUNK}"
+    )
+    assert counted > CHUNK, "more than one chunk, to check the chunks add up"
+
+    print("\nSFT's scales: 1/A on every target")
+    scales = torch.full((counted,), 1 / counted, device=DEVICE)  # [A]
+    compare(model, ids, mask, scales, packing)
+
+    print("\neach conversation's targets scaled by one random number from -1 to 1, over 12")
+    numbers = torch.rand(CONVERSATIONS) * 2 - 1  # [12], from -1 to 1
+    per_target = [n / CONVERSATIONS for n, (_, m) in zip(numbers.tolist(), chats) for c in m if c]
+    scales = torch.tensor(per_target, device=DEVICE)  # [A]
+    compare(model, ids, mask, scales, packing)
+    print("\nthe fused loss is as close to the exact gradient as the plain loss, both times")
 
 
 if __name__ == "__main__":
