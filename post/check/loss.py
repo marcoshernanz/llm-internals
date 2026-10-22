@@ -4,7 +4,9 @@ against the plain loss: every position's logits at once, then cross-entropy over
 targets, as SFT computed it before. Twice: with SFT's scales, 1/A on every target, for the mean;
 and with each conversation's targets scaled by a random number from -1 to 1, over the number of
 conversations, as REINFORCE scales each answer by its reward (post/reinforce.py), and as a
-baseline makes some scales negative. Neither is exact. Both run the head's matmuls in bf16, which
+baseline makes some scales negative. Then those signed scales once more, on each target's log
+probability with its logits computed again in the backward pass, as GRPO computes it
+(post/grpo.py). Neither is exact. Both run the head's matmuls in bf16, which
 keeps about 3 significant digits, and they round in different places: the fused loss rounds the
 head's gradient once per chunk, the plain one once. Their gradients differ by up to 2% for a weight.
 So each is measured against the exact gradient, with the head and the cross-entropy in fp32, and the
@@ -26,7 +28,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from post.chat import gsm8k_chat, render, scaled_loss
+from post.chat import gsm8k_chat, render, scaled_loss, token_log_probs
 from post.gsm8k import load_gsm8k
 from post.linear_cross_entropy import CHUNK
 from post.qwen3 import DEVICE, REPO_ID, Packing, Qwen3, load_qwen3, load_tokenizer
@@ -102,13 +104,23 @@ def errors(grads: dict[str, Tensor], exact: dict[str, Tensor]) -> dict[str, floa
     return result
 
 
-def compare(model: Qwen3, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing) -> None:
+def log_prob_loss(
+    model: Qwen3, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing
+) -> Tensor:  # [1, T], [1, T], [A]
+    """The same loss from each target's log probability (post/linear_cross_entropy.py's
+    TokenLogProbs), as GRPO computes it: minus each one times its scale, summed."""
+    return -(scales * token_log_probs(model, ids, mask, packing)).sum()
+
+
+def compare(
+    model: Qwen3, fused_loss: Loss, ids: Tensor, mask: Tensor, scales: Tensor, packing: Packing
+) -> None:
     """Print each loss and its gradient's errors against the exact one; assert the fused loss is
     about as close as the plain one."""
     exact, exact_grads = gradients(model, exact_loss, ids, mask, scales, packing)
     plain, grads = gradients(model, plain_loss, ids, mask, scales, packing)
     plain_errors = errors(grads, exact_grads)
-    fused, grads = gradients(model, scaled_loss, ids, mask, scales, packing)
+    fused, grads = gradients(model, fused_loss, ids, mask, scales, packing)
     fused_errors = errors(grads, exact_grads)
     size = scales.abs().sum().item()  # the scales' total size
     print(f"loss: exact {exact:.5f}, plain {plain:.5f}, fused {fused:.5f}; scales' size {size:.1f}")
@@ -151,14 +163,18 @@ def main() -> None:
 
     print("\nSFT's scales: 1/A on every target")
     scales = torch.full((counted,), 1 / counted, device=DEVICE)  # [A]
-    compare(model, ids, mask, scales, packing)
+    compare(model, scaled_loss, ids, mask, scales, packing)
 
     print("\neach conversation's targets scaled by one random number from -1 to 1, over 12")
     numbers = torch.rand(CONVERSATIONS) * 2 - 1  # [12], from -1 to 1
     per_target = [n / CONVERSATIONS for n, (_, m) in zip(numbers.tolist(), chats) for c in m if c]
     scales = torch.tensor(per_target, device=DEVICE)  # [A]
-    compare(model, ids, mask, scales, packing)
-    print("\nthe fused loss is as close to the exact gradient as the plain loss, both times")
+    compare(model, scaled_loss, ids, mask, scales, packing)
+
+    print("\nthe same signed scales, on each target's log probability, its logits computed again")
+    print("in the backward pass")
+    compare(model, log_prob_loss, ids, mask, scales, packing)
+    print("\nthe fused losses are as close to the exact gradient as the plain loss, every time")
 
 
 if __name__ == "__main__":
