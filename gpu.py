@@ -6,7 +6,8 @@ on the versions in uv.lock. Each module runs in its own process, so one module's
 memory doesn't carry into the next. Its output streams here and is saved to ``out/<module>.log``;
 files a module writes to ``out/`` come back to the local ``out/`` too. One container for all the
 modules pays the startup and the model download once. At the end it prints how long it waited
-for a GPU, how long it ran, and what that cost: Modal bills the running time only.
+for a GPU, how long it ran, and what that cost: Modal bills the running time only. Weights a
+module saves to ``/checkpoints``, a Modal Volume, stay there for later runs to load.
 """
 
 import subprocess
@@ -20,15 +21,17 @@ GPU = "L4"  # the cheapest GPU on Modal that computes in bf16
 DOLLARS_PER_HOUR = 0.80  # the L4's rate; CPU and memory add about 1%
 TIMEOUT_SECONDS = 60 * 60  # stops a stuck run before it costs more than $0.80
 OUT_DIR = Path("out")
+CHECKPOINTS = "/checkpoints"  # weights a module saves there stay for later runs (post/qwen3.py)
 
 image = modal.Image.debian_slim(python_version="3.14")
 image = image.uv_sync()  # uv.lock's versions, dev group too: post.check.qwen3 needs transformers
 image = image.env({"HF_HUB_DISABLE_PROGRESS_BARS": "1"})
 image = image.add_local_python_source("core", "post")
 app = modal.App("deepseek-v4-1-flash", image=image)
+volume = modal.Volume.from_name("deepseek-v4-1-flash-checkpoints", create_if_missing=True)
 
 
-@app.function(gpu=GPU, timeout=TIMEOUT_SECONDS)
+@app.function(gpu=GPU, timeout=TIMEOUT_SECONDS, volumes={CHECKPOINTS: volume})
 def run(modules: list[str]) -> tuple[dict[str, bytes], float]:
     """Run the modules; return the files in out/ and the seconds this took."""
     started = time.time()
@@ -49,6 +52,7 @@ def run(modules: list[str]) -> tuple[dict[str, bytes], float]:
                 log.write(line)
         code = process.wait()
         print(f"({module}: exit code {code}, {(time.time() - start) / 60:.1f} minutes)", flush=True)
+    volume.commit()  # what the modules saved to CHECKPOINTS, kept for later runs
     files = {path.name: path.read_bytes() for path in OUT_DIR.glob("*")}
     return files, time.time() - started
 
