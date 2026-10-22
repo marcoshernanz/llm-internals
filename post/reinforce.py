@@ -10,7 +10,14 @@ N answers:
 On average over the answers the model samples, its gradient is minus the gradient of the expected
 reward: each step makes right answers more likely. With rewards of 1 and 0, wrong answers get no
 weight: it's rejection sampling (post/rejection_sampling.py) on every step, always on the current
-model's own answers. Subtracting a baseline from the rewards, the next step, makes them count.
+model's own answers.
+
+With baseline, each answer's reward is replaced by its advantage: the reward minus the mean reward
+of the 8 answers to the same question (post/simple/baseline.py). The baseline changes nothing on
+average, since the gradient of the probabilities' sum, 1, is 0. But a right answer among wrong ones
+is pushed up, the wrong ones are pushed down, and a question whose answers all score the same
+pushes nothing. GRPO's advantage also divides by the group's standard deviation; Dr. GRPO drops
+that, and so does this, for now.
 
 The answers are sampled by a bf16 copy of the model, refreshed from the trained weights before each
 step, as frontier RL samples with an inference engine apart from the trainer. Their token ids go to
@@ -20,9 +27,12 @@ step's answers packed into rows of up to 2,048 tokens, whose gradients add up be
 step. The learning rate is constant, as in most RL recipes. 2e-6 is a fifth of SFT's peak: RL's is
 often a tenth, 1e-6 in DAPO and as TRL's GRPO default, and this run is short.
 Run with ``uv run modal run gpu.py --modules post.reinforce``, after post.sft has saved its
-weights; it saves its own as "reinforce". post/eval/reinforce.py measures what it changes.
+weights; it saves its own as "reinforce". post/eval/reinforce.py and post/eval/baseline.py measure
+what it changes, without and with the baseline.
 
 Shape letters used in the comments:
+    Q   questions in a step
+    S   answers per question
     T   tokens in a packed row
     A   of them, the answer tokens, the targets the loss counts
 """
@@ -77,17 +87,27 @@ def rollouts(
     return chats, rewards
 
 
-def reinforce_loss(model: Qwen3, chats: list[Chat], rewards: list[float], count: int) -> Tensor:
+def advantages(rewards: list[float]) -> list[float]:
+    """Each answer's reward minus the mean reward of its question's answers, which come together."""
+    groups = torch.tensor(rewards).reshape(-1, SAMPLES)  # [Q, S]
+    centered = groups - groups.mean(dim=-1, keepdim=True)  # [Q, S]
+    return centered.flatten().tolist()
+
+
+def reinforce_loss(model: Qwen3, chats: list[Chat], weights: list[float], count: int) -> Tensor:
     """These answers' share of the loss: each answer token's minus log probability times the
-    answer's reward, over count, the step's N answers."""
+    answer's weight, over count, the step's N answers."""
     ids, mask, packing = join(chats)  # [1, T] each
-    scales = [r / count for (_, answer), r in zip(chats, rewards) for token in answer if token]
-    scales_t = torch.tensor(scales, device=DEVICE)  # [A], each answer's reward on its tokens
+    scales = [w / count for (_, answer), w in zip(chats, weights) for token in answer if token]
+    scales_t = torch.tensor(scales, device=DEVICE)  # [A], each answer's weight on its tokens
     return scaled_loss(model, ids, mask, scales_t, packing)
 
 
-def reinforce(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
-    """Train the model on STEPS steps of QUESTIONS problems each."""
+def reinforce(
+    model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]], baseline: bool = False
+) -> None:
+    """Train the model on STEPS steps of QUESTIONS problems each, weighting each answer by its
+    reward, or with baseline by its advantage."""
     sampler = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # the copy that samples
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
@@ -98,12 +118,13 @@ def reinforce(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]
         batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
         chats, rewards = rollouts(sampler, tokenizer, batch)
-        start = 0  # pack keeps the order: each row's rewards come next
+        weights = advantages(rewards) if baseline else rewards
+        start = 0  # pack keeps the order: each row's weights come next
         for row in pack(chats):
-            row_rewards = rewards[start : start + len(row)]
+            row_weights = weights[start : start + len(row)]
             start += len(row)
             with torch.autocast(DEVICE, dtype=torch.bfloat16):  # matmuls in bf16
-                loss = reinforce_loss(model, row, row_rewards, len(chats))
+                loss = reinforce_loss(model, row, row_weights, len(chats))
             loss.backward()  # adds to the gradients of the rows before
         torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
         optimizer.step()
