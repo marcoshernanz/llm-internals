@@ -11,7 +11,8 @@ bf16 (mixed precision): an update far smaller than a weight would vanish if the 
 which keeps only about 3 significant digits.
 Each step's conversations are packed end to end into one row, with no padding; attention stays
 within each conversation (post/qwen3.py).
-Run with ``uv run modal run gpu.py --modules post.sft``. post/eval/sft.py measures what it changes.
+Run with ``uv run modal run gpu.py --modules post.sft``: it saves the weights as "sft", which later
+stages start from. post/eval/sft.py measures what it changes.
 
 Shape letters used in the comments:
     T   tokens in a step's packed row
@@ -24,7 +25,7 @@ from torch import Tensor, nn
 
 from post.chat import gsm8k_chat, render, sft_loss
 from post.gsm8k import load_gsm8k
-from post.qwen3 import DEVICE, REPO_ID, Packing, Qwen3, load_qwen3, load_tokenizer
+from post.qwen3 import DEVICE, REPO_ID, Packing, Qwen3, load_qwen3, load_tokenizer, save_weights
 
 GSM8K = 1_600  # of GSM8K's 7,473 train problems, 162 tokens long on average
 SMOLTALK = 600  # of the 115,086 conversations in smol-smoltalk's first train file, 865 on average
@@ -113,6 +114,7 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)  # fp32: the master copy of the weights
     train(model, load_chats(tokenizer))
+    save_weights(model, "sft")
 
 
 if __name__ == "__main__":
