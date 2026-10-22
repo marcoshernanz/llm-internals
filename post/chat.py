@@ -28,7 +28,7 @@ from tokenizers import Tokenizer
 from torch import Tensor
 
 from post.gsm8k import worked_solution
-from post.linear_cross_entropy import LinearCrossEntropy
+from post.linear_cross_entropy import LinearCrossEntropy, TokenLogProbs
 from post.qwen3 import DEVICE, Packing, Qwen3, token_id
 from post.sampler import generate
 
@@ -83,6 +83,18 @@ def scaled_loss(
     hidden = hidden[counted]  # [A, D]
     targets = targets[counted]  # [A]
     return LinearCrossEntropy.apply(hidden, model.embed_tokens.weight, targets, scales)
+
+
+def token_log_probs(
+    model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing | None = None
+) -> Tensor:  # [B, T], [B, T]
+    """The log probability of each true next token the mask counts, [A], with no logits kept
+    (post/linear_cross_entropy.py)."""
+    hidden = model.hidden(ids, packing=packing)  # [B, T, D]
+    hidden = hidden[:, :-1]  # [B, T-1, D], the last token has no target
+    targets = ids[:, 1:]  # [B, T-1]
+    counted = mask[:, 1:]  # [B, T-1]
+    return TokenLogProbs.apply(hidden[counted], model.embed_tokens.weight, targets[counted])
 
 
 def sft_loss(
