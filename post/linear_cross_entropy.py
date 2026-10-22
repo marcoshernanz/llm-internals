@@ -13,6 +13,10 @@ For one position with logits z and true token y, the loss and its gradient are
 the probabilities, with 1 taken off at the true token. Through the head, z = W h, that gradient
 reaches h as dloss/dz @ W, and W as the outer product of dloss/dz with h.
 
+Each position's loss is scaled by its own number, and the scaled losses summed: SFT scales each by
+1/A for the mean; RL scales each answer's tokens by the answer's reward (post/reinforce.py). The
+gradient of a scaled loss is scaled the same way.
+
 So each chunk's gradients are computed right away, in the forward pass, and its logits thrown away:
 what's kept is the gradient for every hidden state and the head's, summed over the chunks; the
 head's only if it trains, and with LoRA it's frozen (post/lora.py). The loss is the last thing
@@ -36,11 +40,14 @@ CHUNK = 1_024  # positions at a time: 0.6 GB of fp32 logits, whatever the step's
 
 
 class LinearCrossEntropy(torch.autograd.Function):
-    """The mean over the positions of minus the log probability of each target, with the head W."""
+    """The sum over the positions of minus the log probability of each target, with the head W,
+    each times its scale."""
 
     @staticmethod
-    def forward(ctx: Any, hidden: Tensor, weight: Tensor, targets: Tensor) -> Tensor:
-        # [A, D], [V, D], [A]
+    def forward(
+        ctx: Any, hidden: Tensor, weight: Tensor, targets: Tensor, scales: Tensor
+    ) -> Tensor:
+        # [A, D], [V, D], [A], [A]
         count = targets.size(0)
         weight16 = weight.to(torch.bfloat16)  # [V, D]
         grad_hidden = torch.empty_like(hidden)  # [A, D]
@@ -53,26 +60,27 @@ class LinearCrossEntropy(torch.autograd.Function):
             h = hidden[start:end]  # [C, D]
             h = h.to(torch.bfloat16)  # [C, D]
             y = targets[start:end]  # [C]
+            scale = scales[start:end]  # [C]
             rows = torch.arange(end - start, device=hidden.device)  # [C]
             z = h @ weight16.T  # [C, V], the chunk's logits
             z = z.float()  # [C, V], the softmax in fp32
             lse = z.logsumexp(dim=-1)  # [C]
-            total += (lse - z[rows, y]).sum()  # minus each target's log probability
+            total += (scale * (lse - z[rows, y])).sum()  # minus each target's log probability
             z -= lse[:, None]  # [C, V], log probabilities, in place
             z.exp_()  # [C, V], probabilities, in place
             z[rows, y] -= 1  # [C, V], dloss/dz of each position's own loss
-            z /= count  # [C, V], of the mean
+            z *= scale[:, None]  # [C, V], of each scaled loss
             grad_z = z.to(torch.bfloat16)  # [C, V]
             grad_hidden[start:end] = grad_z @ weight16  # [C, D]
             if grad_weight is not None:
                 grad_weight += grad_z.T @ h  # [V, D]
         ctx.save_for_backward(grad_hidden, grad_weight)
-        return total / count
+        return total
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None]:
+    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None, None]:
         (grad_loss,) = grad_outputs  # [], the loss's: its only output
         grad_hidden, grad_weight = ctx.saved_tensors  # [A, D], [V, D] or None
         if grad_weight is not None:
             grad_weight = grad_weight * grad_loss  # [V, D]
-        return grad_hidden * grad_loss, grad_weight, None  # targets get none
+        return grad_hidden * grad_loss, grad_weight, None, None  # targets and scales get none
