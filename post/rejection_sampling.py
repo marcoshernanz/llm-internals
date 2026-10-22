@@ -18,7 +18,7 @@ import torch
 from tokenizers import Tokenizer
 
 from post.chat import answers, render
-from post.gsm8k import load_gsm8k, reference_answer, strict_answer
+from post.gsm8k import reference_answer, strict_answer
 from post.qwen3 import (
     DEVICE,
     REPO_ID,
@@ -28,22 +28,13 @@ from post.qwen3 import (
     load_weights,
     save_weights,
 )
-from post.sft import GSM8K, Chat, load_chats, train
+from post.sft import Chat, load_chats, train, unread_gsm8k
 
 QUESTIONS = 384  # GSM8K train questions SFT didn't read
 SAMPLES = 8  # per question
 TEMPERATURE = 1.0
 MAX_NEW_TOKENS = 256  # per answer
 KEEP = 4  # right answers kept per question, at most
-
-
-def unread_problems() -> list[dict[str, str]]:
-    """GSM8K train problems SFT didn't read. Its first random draw after seeding is GSM8K's order,
-    whose first GSM8K problems it reads (post/sft.py): the same draw gives the ones after."""
-    problems = load_gsm8k("train")
-    torch.manual_seed(0)
-    order = torch.randperm(len(problems)).tolist()
-    return [problems[i] for i in order[GSM8K : GSM8K + QUESTIONS]]
 
 
 def right_answers(
@@ -83,7 +74,7 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)
     load_weights(model, "sft")
-    kept = right_answers(model, tokenizer, unread_problems())
+    kept = right_answers(model, tokenizer, unread_gsm8k(QUESTIONS))
     del model  # free the SFT model before the base model loads
     model = retrain(tokenizer, [chat for chats in kept for chat in chats])
     save_weights(model, "rejection_sampling")
