@@ -54,6 +54,16 @@ def load_chats(tokenizer: Tokenizer) -> list[Chat]:
     return [chats[i] for i in order]
 
 
+def unread_gsm8k(count: int) -> list[dict[str, str]]:
+    """count GSM8K train problems SFT doesn't read, for later stages. load_chats's first random
+    draw after seeding is GSM8K's order, whose first GSM8K problems it reads: the same draw gives
+    the ones after."""
+    problems = load_gsm8k("train")
+    torch.manual_seed(0)
+    order = torch.randperm(len(problems)).tolist()
+    return [problems[i] for i in order[GSM8K : GSM8K + count]]
+
+
 def pack(chats: list[Chat]) -> list[list[Chat]]:
     """The conversations in order, grouped into steps: each step takes the next one while the step
     stays within TOKENS_PER_STEP tokens."""
