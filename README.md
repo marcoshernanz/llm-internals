@@ -37,6 +37,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/nf4.py` | NF4, QLoRA's 4-bit format: 16 levels from the normal distribution, a scale per 64 weights, the scales quantized again to 8 bits, and a matmul that dequantizes each weight on the fly, in the backward pass too |
 | `post/qlora.py` | QLoRA: LoRA with every frozen linear layer stored in NF4 |
 | `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward, or, with the baseline, times the reward minus its question's mean |
+| `post/grpo.py` | GRPO's clipped objective on REINFORCE with the baseline: each step's answers reused for 4 updates, each token weighted by the ratio of its probability now to when it was sampled, clipped to 1 ± 0.2 |
 | `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
 | `post/simple/sft.py` | SFT at its simplest: six chat conversations, the loss on the assistant's tokens only, and a new question answered before and after |
 | `post/simple/lora.py` | LoRA at its simplest: every linear layer frozen with a trained low-rank correction next to it, taught four made-up facts |
@@ -56,7 +57,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/check/packing.py` | checks each conversation in a packed row gets the same logits as on its own, and shows what plain causal attention does instead |
 | `post/check/lora.py` | checks LoRA starts from the loaded model's exact logits, trains only its own matrices and the embedding table, and leaves every frozen weight unchanged |
 | `post/check/nf4.py` | checks NF4's levels against QLoRA's table, 4.127 bits per weight, every weight stored as its nearest level, and the matmul against autograd, keeping nothing for the backward pass |
-| `post/check/loss.py` | checks the fused loss's gradients are as close to the exact ones, computed in fp32, as the plain loss's: with SFT's scales, and with signed scales per conversation, as RL's |
+| `post/check/loss.py` | checks the fused loss's gradients are as close to the exact ones, computed in fp32, as the plain loss's: with SFT's scales, and with signed scales per conversation, as RL's, and from per-token log probabilities with the logits computed again in the backward pass, as GRPO's |
 | `post/bench/generate.py` | times generation without a cache, rerunning the whole sequence per token, then the sampler at batches of 1 to 64; prints 16 sampled answers |
 | `post/bench/memory.py` | peak memory of one SFT step at 1,024 to 4,096 tokens: with no head, with the plain loss and with the fused one |
 | `post/bench/finetune_memory.py` | peak memory of SFT steps for Qwen3-0.6B, 1.7B and 4B, fine-tuned fully, with LoRA and with QLoRA |
@@ -72,6 +73,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/eval/rejection_control.py` | rejection sampling's control: the same questions with GSM8K's worked solutions instead of the model's own answers, retrained and measured the same way |
 | `post/eval/reinforce.py` | runs REINFORCE from the SFT model and measures it: the reward every 5 steps, then pass@k as `post/eval/pass_at_k.py` measures the SFT model |
 | `post/eval/baseline.py` | runs REINFORCE with the baseline, each reward minus its question's mean, and measures it as `post/eval/reinforce.py` measures REINFORCE without it |
+| `post/eval/grpo.py` | runs GRPO's clipped objective from the SFT model and measures it as `post/eval/reinforce.py` measures REINFORCE, against REINFORCE and the baseline |
 | `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
