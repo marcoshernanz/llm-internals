@@ -365,6 +365,19 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The training reward, over 5 steps at a time: 0.287, 0.300, 0.322, 0.425, 0.353, 0.438, 0.341, 0.366. Each window has different questions, so it's noisy.
   - The answers got shorter, 112 tokens on average to 90, and more of them close their turn: 98%, from 93%. An answer that runs to the token limit gets no reward.
   - With rewards of 1 and 0, every wrong answer gets weight 0: at a reward of about 0.35, two thirds of each step's sampled answers teach nothing. That's the next problem: a baseline.
+- **Simple versions** (`post/simple/`): one bare file per mechanism, with no packing, fused loss, cache or batching tricks, on toy prompts. REINFORCE on "My favorite animal is the", with a reward of 1 for "dog", reaches 1.0 by step 4, then collapses to "dog because he is my dog because he": once every reward is 1, every sample is pushed up, whatever it says.
+- **The baseline** (done, `baseline=True` in `post/reinforce.py`): each answer's weight is its reward minus the mean reward of its question's 8 answers. Wrong answers are pushed down, and a question whose answers all score the same pushes nothing. GRPO also divides by the group's standard deviation; Dr. GRPO drops that, and so does this, for now.
+  - The toy (`post/simple/baseline.py`): the same 1.0 by step 4, but no collapse. Through step 29 the answers stay varied: "dog that is easy to take care of", "dog and dog is remarkable because I can".
+  - GSM8K (`post/eval/baseline.py`), the same start, questions and 40 steps as REINFORCE:
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | REINFORCE | 52% | 34.2% | 47.7% | 61.0% | 72.8% | 83.0% | 34 | 7 |
+    | with the baseline | 52% | 35.2% | 49.1% | 62.9% | 75.6% | 85.0% | 30 | 5 |
+
+    - Every pass@k is a little higher, and more so at large k: 1.0 point at pass@1, 2.8 at pass@8. That's within the noise of 200 questions, but it leans the way the toy does. REINFORCE pushes up whichever right answers it happened to sample, which narrows them. The baseline pushes up only answers that beat their question's average, and pushes the others down.
+    - The answers shortened less, from 110 to 98 tokens, where REINFORCE's went from 112 to 90.
+    - 10.1 minutes, 15.2 seconds per step, peak 17.3 GiB: the baseline costs nothing.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
