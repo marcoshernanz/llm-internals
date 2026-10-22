@@ -18,7 +18,7 @@ from post.eval.gsm8k import MAX_NEW_TOKENS, pass_at_k
 from post.gsm8k import last_number, load_gsm8k, reference_answer, strict_answer
 from post.qwen3 import DEVICE, DTYPE, REPO_ID, Qwen3, load_qwen3, load_tokenizer, load_weights
 
-QUESTIONS = 200
+TEST_QUESTIONS = 200
 SAMPLES = 16  # n, per question
 TEMPERATURE = 1.0
 KS = [1, 2, 4, 8, 16]
@@ -73,8 +73,8 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, DTYPE, DEVICE)
     load_weights(model, "sft")
-    print(f"the SFT model (post/sft.py), on the first {QUESTIONS} GSM8K test questions")
-    measure(model, tokenizer, load_gsm8k("test")[:QUESTIONS])
+    print(f"the SFT model (post/sft.py), on the first {TEST_QUESTIONS} GSM8K test questions")
+    measure(model, tokenizer, load_gsm8k("test")[:TEST_QUESTIONS])
 
 
 if __name__ == "__main__":
