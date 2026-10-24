@@ -17,6 +17,7 @@ GSM8K in `post/`, with their results in `post/ROADMAP.md`, stages 3 and 4.
 | 008 | [`008_no_std.py`](008_no_std.py) | 007 | no division by the standard deviation | `post/rlvr.py`, fix 2 |
 | 009 | [`009_no_kl.py`](009_no_kl.py) | 008 | no KL penalty | `post/rlvr.py`, fix 3 |
 | 010 | [`010_zero_gradient_filtering.py`](010_zero_gradient_filtering.py) | 009 | no update on a group whose rewards are all equal | `post/rlvr.py`, fix 4 |
+| 011 | [`011_clip_higher.py`](011_clip_higher.py) | 010 | the clip's upper bound raised, the lower kept | `post/rlvr.py`, fix 5 |
 
 ## 001 pass@k
 
@@ -198,3 +199,26 @@ groups whose rewards differ.
 **What the toy can't show.** One prompt makes one group, so dropping it drops the whole batch:
 there's no rest to shrink, and refilling it means sampling the same prompt again, which the next
 batch does. `post/rlvr.py` samples more questions until it has 8 whose rewards differ.
+
+## 011 Clip-higher
+
+**Problem.** The clip lets a token pushed up grow to at most:
+
+$$
+p_\text{new} \le (1 + \epsilon)\, p_\text{old}
+$$
+
+so its room to grow is a share of how likely it already was:
+
+$$
+p_\text{new} - p_\text{old} \le \epsilon\, p_\text{old}
+$$
+
+An unlikely token in a right sample can barely grow while the likely ones grow freely, so the
+samples narrow onto what the model already prefers.
+
+**Fix.** Raise only the upper bound: ratios clipped to 1 - 0.2 and 1 + 0.28, DAPO's values.
+Loosening the lower bound too would let the tokens of wrong samples be pushed toward 0, which
+narrows the samples as well.
+
+**The change.** `EPSILON` becomes `EPSILON_LOW` and `EPSILON_HIGH`, and the clamp takes both.
