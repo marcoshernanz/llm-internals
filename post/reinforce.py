@@ -69,22 +69,32 @@ def reward(text: str, reference: float) -> float:
 
 
 def rollouts(
-    sampler: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]
-) -> tuple[list[Chat], list[float]]:
+    sampler: Qwen3,
+    tokenizer: Tokenizer,
+    problems: list[dict[str, str]],
+    head: Tensor | None = None,
+) -> tuple[list[Chat], list[float], list[list[float]]]:
     """Each problem's question with each of its sampled answers, as token ids with the answer's
-    marked, and each answer's reward."""
+    marked, each answer's reward, and the sampler's log probability of each answer token. head is
+    the sampler's (post/qwen3.py)."""
     questions = [problem["question"] for problem in problems]
-    sampled = answer_ids(sampler, tokenizer, questions, SAMPLES, TEMPERATURE, MAX_NEW_TOKENS)
+    sampled, sampled_log_probs = answer_ids(
+        sampler, tokenizer, questions, SAMPLES, TEMPERATURE, MAX_NEW_TOKENS, head
+    )
     chats = []
     rewards = []
-    for problem, question, group in zip(problems, questions, sampled):
+    log_probs = []
+    for problem, question, group, group_log_probs in zip(
+        problems, questions, sampled, sampled_log_probs
+    ):
         prompt = render_prompt(tokenizer, [{"role": "user", "content": question}])
         reference = reference_answer(problem["answer"])
-        for ids in group:
+        for ids, answer_log_probs in zip(group, group_log_probs):
             chats.append((prompt + ids, [False] * len(prompt) + [True] * len(ids)))
             text = tokenizer.decode(ids, skip_special_tokens=False)
             rewards.append(reward(text, reference))
-    return chats, rewards
+            log_probs.append(answer_log_probs)
+    return chats, rewards, log_probs
 
 
 def advantages(rewards: list[float]) -> list[float]:
@@ -117,7 +127,7 @@ def reinforce(
     for step in range(STEPS):
         batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
-        chats, rewards = rollouts(sampler, tokenizer, batch)
+        chats, rewards, _ = rollouts(sampler, tokenizer, batch)
         weights = advantages(rewards) if baseline else rewards
         start = 0  # pack keeps the order: each row's weights come next
         for row in pack(chats):
