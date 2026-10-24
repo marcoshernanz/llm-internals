@@ -456,6 +456,22 @@ Each stage starts from a problem we can see in the previous stage's output.
     - The KL to the SFT model ended at 0.026 per answer token, against 0.043: the model moved less. With rewards of 1 and 0 the standard deviation is at most about 0.5, so the division always enlarged the advantages, about doubling them at least. Without it, the KL penalty at the same weight, 0.04, counts at least twice as much against the reward. Adam ignores the loss's overall scale, but not the balance between its two terms.
     - So the fixes interact: the KL weight was set for advantages divided by the standard deviation. That's the next problem: the KL holding the model back, which step 3 removes.
     - Right answers 84, 76, 85, 81 tokens, wrong 120, 118, 101, 113, as with the first fix alone. 7.8 minutes, 23.3 seconds per step, peak 19.5 GiB. 96% of answers close their turn.
+- **3. No KL penalty** (done, `post/rlvr.py`). The penalty pulls the model toward a frozen copy of the model it started from. It guards training on a learned reward model, which the model can learn to fool with answers it scores high but that are wrong. A checked reward reads the number the question asks for, so there's nothing to fool: the pull only holds the model back, and the copy costs its memory and a forward pass over every row. DAPO, Dr. GRPO and OLMo 3 drop it; OLMo 3's report calls that common practice. The alternative is DeepSeek-R1's: a weight of 0.001, with the copy replaced by the current model every 400 steps.
+  - The toy (`learn/2_rl/009_no_kl.py`): `008_no_std.py` without the reference model, `BETA` and the KL lines. Against `005_ratio_clipping.py`, only the loss line, weight decay and the print differ: with GRPO's three additions taken out, what's left is ratio clipping with the token-level loss. Every toy sample is 8 tokens, so that loss is ratio clipping's divided by 8, which Adam ignores: the run gives 005's rewards and samples, batch for batch.
+  - GSM8K: `post/rlvr.py` drops the reference model and uses `post/ratio_clipping.py`'s `clipped_loss`, each token weighted by its answer's advantage over the batch's answer tokens. It logs no KL: measuring it needs the copy this removes.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | ratio clipping | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
+    | GRPO as DeepSeekMath wrote it | 57% | 38.9% | 52.7% | 66.0% | 78.2% | 89.0% | 22 | 7 |
+    | with the token-level loss | 52% | 38.7% | 53.7% | 67.6% | 79.9% | 90.0% | 20 | 3 |
+    | and no standard deviation | 51% | 34.2% | 49.2% | 63.5% | 75.6% | 85.5% | 29 | 1 |
+    | and no KL penalty | 52% | 40.5% | 54.9% | 67.7% | 78.3% | 86.5% | 27 | 10 |
+
+    - pass@1 up 6.3 points from the second fix, back where ratio clipping was, as the toy's diff says it should be. Taken out, GRPO's three additions cost nothing at this scale.
+    - The training reward rose faster early: 0.331, 0.422, 0.381, 0.519, against 0.272, 0.375, 0.434, 0.494. Two runs with the same settings differ by up to 0.03, so only the first two windows are clearly ahead.
+    - 10 questions with all 16 right, against 1, and pass@16 3.5 points below the first fix alone: without the pull the model sharpens more. Within the noise of 200 questions.
+    - 7.5 minutes, 22.5 seconds per step against 23.3, peak 17.3 GiB against 19.5: ratio clipping's, the copy gone. Right answers 86, 79, 83, 88 tokens, wrong 118, 116, 109, 119. 95% of answers close their turn.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
