@@ -11,11 +11,28 @@ import torch
 from torch import Tensor
 
 from post.qwen3 import DEVICE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
-from post.simple.reinforce import LEARNING_RATE, PROMPT, SAMPLES, reward, sample
 
+PROMPT = "My favorite animal is the"
+SAMPLES = 16
+NEW_TOKENS = 8
+LEARNING_RATE = 1e-5
 BATCHES = 8
 UPDATES = 4
 EPSILON = 0.2
+
+
+def reward(text: str) -> float:
+    return 1.0 if "dog" in text else 0.0
+
+
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
+    ids = prompt.repeat(samples, 1)  # [N, P]
+    for _ in range(NEW_TOKENS):
+        logits = model(ids)[:, -1]  # [N, V]
+        probs = logits.softmax(dim=-1)  # [N, V]
+        next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
+        ids = torch.cat([ids, next_ids], dim=1)  # [N, T]
+    return ids  # [N, T]
 
 
 def token_log_probs(model: Qwen3, ids: Tensor, prompt_len: int) -> Tensor:  # [N, T]
@@ -27,7 +44,7 @@ def token_log_probs(model: Qwen3, ids: Tensor, prompt_len: int) -> Tensor:  # [N
     return picked[:, prompt_len - 1 :]  # [N, A]
 
 
-def train(epsilon: float) -> None:
+def main() -> None:
     torch.manual_seed(0)
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)
@@ -45,7 +62,7 @@ def train(epsilon: float) -> None:
         for _ in range(UPDATES):
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
             ratios = (new_log_probs - old_log_probs).exp()  # [N, A]
-            clipped = ratios.clamp(1 - epsilon, 1 + epsilon)  # [N, A]
+            clipped = ratios.clamp(1 - EPSILON, 1 + EPSILON)  # [N, A]
             objective = torch.minimum(ratios * advantages, clipped * advantages)  # [N, A]
             loss = -objective.sum(dim=-1).mean()
             loss.backward()
@@ -56,13 +73,6 @@ def train(epsilon: float) -> None:
             f"batch {batch}: reward {rewards.mean().item():.2f}, "
             f"largest ratio {ratios.max().item():.1f}  {texts[0]!r}"
         )
-
-
-def main() -> None:
-    print(f"clipped to 1 ± {EPSILON}:")
-    train(EPSILON)
-    print("\nnot clipped:")
-    train(float("inf"))
 
 
 if __name__ == "__main__":
