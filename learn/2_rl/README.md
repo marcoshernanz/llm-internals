@@ -15,6 +15,7 @@ GSM8K in `post/`, with their results in `post/ROADMAP.md`, stages 3 and 4.
 | 006 | [`006_grpo.py`](006_grpo.py) | 005 | GRPO as DeepSeekMath wrote it: the standard deviation, each sample's tokens averaged, a KL penalty | `post/grpo.py` |
 | 007 | [`007_token_mean.py`](007_token_mean.py) | 006 | every token in the batch averaged at once | `post/rlvr.py`, fix 1 |
 | 008 | [`008_no_std.py`](008_no_std.py) | 007 | no division by the standard deviation | `post/rlvr.py`, fix 2 |
+| 009 | [`009_no_kl.py`](009_no_kl.py) | 008 | no KL penalty | `post/rlvr.py`, fix 3 |
 
 ## 001 pass@k
 
@@ -156,3 +157,22 @@ $$
 
 **What the toy can't show.** One prompt makes one group, so the division scales the whole batch by
 one number, which Adam all but ignores. The problem is between questions.
+
+## 009 No KL penalty
+
+**Problem.** The KL penalty pulls the model back toward the model it started from. It guards
+training on a learned reward model, which the model can learn to fool with samples it scores high
+but that are wrong. A checked reward has nothing to fool, so the pull only holds the model back, and
+the frozen copy costs a second model's memory and a forward pass over every sample.
+
+**Fix.** No penalty. The objective is ratio clipping's again:
+
+$$
+\min\big(r_{i,t} A_i,\ \mathrm{clip}(r_{i,t}, 1-\epsilon, 1+\epsilon) A_i\big)
+$$
+
+With this, all three of GRPO's additions are undone: `diff 005_ratio_clipping.py 009_no_kl.py`
+shows the token-level loss line, weight decay at 0, and the print.
+
+**The change.** The `reference` model, `BETA`, `ref_log_probs`, the `log_ref_ratios` and `kl` lines,
+and `- BETA * kl` go.
