@@ -7,12 +7,21 @@ so far:
    advantage over N and the answer's length: in a long answer the push is spread thin. Wrong
    answers are pushed down less the longer they are, and right ones up more the shorter they are.
    Here every token is divided by the batch's answer tokens, so its push depends on its answer's
-   advantage only (post/simple/token_mean.py):
+   advantage only (learn/2_rl/007_token_mean.py):
 
        loss = -1/(sum_j |y_j|) sum_i sum_t [min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps) A_i)
                                             - beta KL_i,t]
 
    This is DAPO's; Dr. GRPO divides by a constant instead.
+
+2. No division by the standard deviation. GRPO divides each advantage by the standard deviation of
+   its question's rewards, which for rewards of 1 and 0 is the square root of p (1 - p), p the
+   share of its answers that are right: it scales up the questions whose answers are most
+   one-sided, nearly all wrong or nearly all right, and the training no longer follows the
+   gradient of the expected reward. The advantage here is the reward minus its question's mean,
+   the baseline's (post/reinforce.py, learn/2_rl/008_no_std.py), as in Dr. GRPO and OLMo 3:
+
+       A_i = R_i - mean(R)
 
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
@@ -26,7 +35,7 @@ import torch
 from tokenizers import Tokenizer
 
 from post.chat import token_log_probs
-from post.grpo import advantages, grpo_loss, token_kl
+from post.grpo import grpo_loss, token_kl
 from post.qwen3 import (
     DEVICE,
     REPO_ID,
@@ -37,7 +46,7 @@ from post.qwen3 import (
     save_weights,
 )
 from post.ratio_clipping import STEPS, UPDATES, token_weights
-from post.reinforce import LEARNING_RATE, LOG_EVERY, QUESTIONS, rollouts
+from post.reinforce import LEARNING_RATE, LOG_EVERY, QUESTIONS, advantages, rollouts
 from post.sft import MAX_GRAD_NORM, join, pack, unread_gsm8k
 
 
