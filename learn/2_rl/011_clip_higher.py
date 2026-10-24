@@ -18,7 +18,8 @@ NEW_TOKENS = 8
 LEARNING_RATE = 1e-5
 BATCHES = 8
 UPDATES = 4
-EPSILON = 0.2
+EPSILON_LOW = 0.2
+EPSILON_HIGH = 0.28
 
 
 def reward(text: str) -> float:
@@ -64,7 +65,7 @@ def main() -> None:
         for _ in range(UPDATES):
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
             ratios = (new_log_probs - old_log_probs).exp()  # [N, A]
-            clipped = ratios.clamp(1 - EPSILON, 1 + EPSILON)  # [N, A]
+            clipped = ratios.clamp(1 - EPSILON_LOW, 1 + EPSILON_HIGH)  # [N, A]
             objective = torch.minimum(ratios * advantages, clipped * advantages)  # [N, A]
             loss = -objective.mean()
             loss.backward()
