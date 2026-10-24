@@ -16,6 +16,7 @@ GSM8K in `post/`, with their results in `post/ROADMAP.md`, stages 3 and 4.
 | 007 | [`007_token_mean.py`](007_token_mean.py) | 006 | every token in the batch averaged at once | `post/rlvr.py`, fix 1 |
 | 008 | [`008_no_std.py`](008_no_std.py) | 007 | no division by the standard deviation | `post/rlvr.py`, fix 2 |
 | 009 | [`009_no_kl.py`](009_no_kl.py) | 008 | no KL penalty | `post/rlvr.py`, fix 3 |
+| 010 | [`010_zero_gradient_filtering.py`](010_zero_gradient_filtering.py) | 009 | no update on a group whose rewards are all equal | `post/rlvr.py`, fix 4 |
 
 ## 001 pass@k
 
@@ -176,3 +177,24 @@ shows the token-level loss line, weight decay at 0, and the print.
 
 **The change.** The `reference` model, `BETA`, `ref_log_probs`, the `log_ref_ratios` and `kl` lines,
 and `- BETA * kl` go.
+
+## 010 Zero-gradient filtering
+
+**Problem.** When every sample in a group gets the same reward, the mean is that reward, so:
+
+$$
+A_i = r_i - \mathrm{mean}(r) = 0 \quad \text{for every sample}
+$$
+
+The group pushes nothing, but it still cost its sampling and its updates. And the token-level loss
+divides every token by all the batch's tokens, these included, so they shrink the push of the
+rest.
+
+**Fix.** Drop every group whose rewards are all equal, and sample more until the batch is full of
+groups whose rewards differ.
+
+**The change.** `if (advantages == 0).all(): continue`.
+
+**What the toy can't show.** One prompt makes one group, so dropping it drops the whole batch:
+there's no rest to shrink, and refilling it means sampling the same prompt again, which the next
+batch does. `post/rlvr.py` samples more questions until it has 8 whose rewards differ.
