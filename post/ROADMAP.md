@@ -422,8 +422,26 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Simple: one standalone file per fix, `post/simple/grpo.py` with that one change, run both ways.
   - Full: `post/grpo.py` stays the original. `post/rlvr.py` starts as a copy and takes the fixes in order, so it ends as the recipe the frontier converged on.
   - Order: the token-level loss, no standard-deviation division (Dr. GRPO), no KL, zero-gradient groups filtered, clip-higher (DAPO), then truncated importance sampling with an fp32 output layer. DAPO's soft length penalty is left out: our reward already scores an answer that runs out of room 0.
-- **1. The token-level loss** (in progress). GRPO averages each answer's tokens, so each token's push is its answer's advantage over N and the answer's length: inside a long answer, the push is spread thin. Wrong answers' tokens are pushed down less the longer they are, and right answers' pushed up more the shorter they are. The fix divides every token by the batch's answer tokens (DAPO's, the most common). Dr. GRPO divides by a constant instead.
+- **1. The token-level loss** (done, `post/rlvr.py`). GRPO averages each answer's tokens, so each token's push is its answer's advantage over N and the answer's length: inside a long answer, the push is spread thin. Wrong answers' tokens are pushed down less the longer they are, and right answers' pushed up more the shorter they are. The fix divides every token by the batch's answer tokens (DAPO's, the most common). Dr. GRPO divides by a constant instead.
   - The toy (`post/simple/token_mean.py`): `post/simple/grpo.py` with `-objective.mean()`, every token in the batch averaged at once, in place of `-objective.mean(dim=-1).mean()`. Every toy sample is 8 tokens, so the two give the same number: the toy shows the formula, and GSM8K's answers, each its own length, show the difference.
+  - GSM8K: `post/rlvr.py` starts as a copy of `post/grpo.py`, and the one change is each token's scale, 1 over the batch's answer tokens where GRPO's is 1 over N and its answer's length. Both log right and wrong answers' lengths over 5 steps at a time; `post.grpo` ran again for that, and its weights replaced the saved "grpo".
+
+    |  | right answers, tokens | wrong answers, tokens | reward |
+    |---|---|---|---|
+    | GRPO | 86, 76, 78, 78 | 114, 112, 99, 100 | 0.297, 0.397, 0.431, 0.472 |
+    | the token-level loss | 91, 80, 94, 93 | 115, 125, 110, 121 | 0.294, 0.381, 0.463, 0.547 |
+
+    - Right answers shrink under GRPO, 86 to 78 tokens, as the bias predicts, and not with the fix, 91 to 93.
+    - Wrong answers don't grow under GRPO in 20 steps: they shrink, 114 to 100, and they're longer with the fix in every window. That half of the bias doesn't show here; the drift builds over far longer runs than this.
+    - Two runs of GRPO with the same settings differ by up to 0.03 in the training reward, so the fix's 0.547 at the end may be noise.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | GRPO as DeepSeekMath wrote it | 57% | 38.9% | 52.7% | 66.0% | 78.2% | 89.0% | 22 | 7 |
+    | with the token-level loss | 52% | 38.7% | 53.7% | 67.6% | 79.9% | 90.0% | 20 | 3 |
+
+    - The same pass@1, a point or two higher from pass@4 on: within the noise of 200 questions. Greedy is one answer per question, so 5 points is 10 questions.
+    - 8.1 minutes, 24.4 seconds per step, peak 19.6 GiB: the fix costs nothing. 94% of answers close their turn.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
