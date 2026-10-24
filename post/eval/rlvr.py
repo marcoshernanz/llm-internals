@@ -1,7 +1,8 @@
 """
 Run GRPO with the fixes so far (post/rlvr.py) from the SFT model and measure it as post/eval/grpo.py
-measures GRPO, on the same questions in the same order: the reward and the lengths of right and
-wrong answers every 5 steps, the time and peak memory, then pass@k on the same test questions.
+measures GRPO, from the same questions in the same order: the reward, how many questions a step
+sampled and how many were all right or all wrong, and the lengths of right and wrong answers every
+5 steps, the time and peak memory, then pass@k on the same test questions.
 Run with ``uv run modal run gpu.py --modules post.eval.rlvr``, after post.sft has saved its
 weights; it saves the trained ones as "rlvr".
 """
@@ -25,7 +26,7 @@ from post.qwen3 import (
 )
 from post.ratio_clipping import EPSILON, STEPS, UPDATES
 from post.reinforce import LEARNING_RATE, QUESTIONS, SAMPLES, TEMPERATURE
-from post.rlvr import rlvr
+from post.rlvr import ROUNDS, rlvr
 from post.sft import unread_gsm8k
 
 # post/eval/grpo.py's run: the same steps and updates, each answer's tokens averaged
@@ -43,6 +44,11 @@ NO_STD = (
     "and no standard deviation: greedy 51%; pass@1 34.2%, pass@2 49.2%, pass@4 63.5%, "
     "pass@8 75.6%, pass@16 85.5%; 29 with none right, 1 with all"
 )
+# this file's run with the first three fixes
+NO_KL = (
+    "and no KL penalty: greedy 52%; pass@1 40.5%, pass@2 54.9%, pass@4 67.7%, "
+    "pass@8 78.3%, pass@16 86.5%; 27 with none right, 10 with all"
+)
 
 
 def main() -> None:
@@ -50,14 +56,14 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)  # fp32: the master copy of the weights
     load_weights(model, "sft")
-    problems = unread_gsm8k(STEPS * QUESTIONS)
+    problems = unread_gsm8k(ROUNDS * STEPS * QUESTIONS)
     print(
-        f"GRPO with the token-level loss, no division by the standard deviation and no KL "
-        f"penalty, from the SFT model: {STEPS} steps of {QUESTIONS} GSM8K "
-        f"train questions SFT didn't read, {SAMPLES} answers each at temperature {TEMPERATURE}, "
+        f"GRPO with the token-level loss, no division by the standard deviation, no KL penalty "
+        f"and no questions whose answers all score the same, from the SFT model: {STEPS} steps of "
+        f"{QUESTIONS} GSM8K train questions SFT didn't read, sampled {QUESTIONS} at a time for at "
+        f"most {ROUNDS} rounds, {SAMPLES} answers each at temperature {TEMPERATURE}, "
         f"{UPDATES} updates per step, ratios clipped to 1 ± {EPSILON}; "
-        f"learning rate {LEARNING_RATE:g}. The reward and right and wrong answers' lengths, "
-        "over the last 5 steps:"
+        f"learning rate {LEARNING_RATE:g}. Over the last 5 steps, of every answer sampled:"
     )
     start = time.perf_counter()
     rlvr(model, tokenizer, problems)
@@ -67,8 +73,8 @@ def main() -> None:
     save_weights(model, "rlvr")
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
-    print(f"\n{SFT}\n{RATIO_CLIPPING}\n{GRPO}\n{TOKEN_LEVEL}\n{NO_STD}")
-    print(f"after GRPO with the three fixes, on the first {TEST_QUESTIONS} GSM8K test questions")
+    print(f"\n{SFT}\n{RATIO_CLIPPING}\n{GRPO}\n{TOKEN_LEVEL}\n{NO_STD}\n{NO_KL}")
+    print(f"after GRPO with the four fixes, on the first {TEST_QUESTIONS} GSM8K test questions")
     measure(model, tokenizer, load_gsm8k("test")[:TEST_QUESTIONS])
 
 
