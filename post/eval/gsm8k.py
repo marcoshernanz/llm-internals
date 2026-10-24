@@ -53,7 +53,7 @@ def answer(
 ) -> list[str]:
     """The model's answers to one prompt, each cut at the next question."""
     ids = torch.tensor(tokenizer.encode(prompt).ids, device=DEVICE)  # [T]
-    new_ids = generate(model, [ids], samples, MAX_NEW_TOKENS, temperature, [stop_id])  # [B, N]
+    new_ids, _ = generate(model, [ids], samples, MAX_NEW_TOKENS, temperature, [stop_id])  # [B, N]
     return [cut(tokenizer.decode(row)) for row in new_ids.tolist()]
 
 
