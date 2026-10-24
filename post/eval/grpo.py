@@ -1,8 +1,8 @@
 """
 Run GRPO as DeepSeekMath wrote it (post/grpo.py) from the SFT model and measure it as
 post/eval/ratio_clipping.py measures ratio clipping, on the same questions in the same order: the
-reward, the answers' length and the KL to the SFT model every 5 steps, the time and peak memory,
-then pass@k on the same test questions.
+reward, the lengths of right and wrong answers and the KL to the SFT model every 5 steps, the time
+and peak memory, then pass@k on the same test questions.
 Run with ``uv run modal run gpu.py --modules post.eval.grpo``, after post.sft has saved its
 weights; it saves the trained ones as "grpo".
 """
@@ -46,8 +46,8 @@ def main() -> None:
         f"GRPO as DeepSeekMath wrote it, from the SFT model: {STEPS} steps of {QUESTIONS} GSM8K "
         f"train questions SFT didn't read, {SAMPLES} answers each at temperature {TEMPERATURE}, "
         f"{UPDATES} updates per step, ratios clipped to 1 ± {EPSILON}, KL weight {BETA}; "
-        f"learning rate {LEARNING_RATE:g}. The reward, the answers' length and the KL, over the "
-        "last 5 steps:"
+        f"learning rate {LEARNING_RATE:g}. The reward, right and wrong answers' lengths and the KL, "
+        "over the last 5 steps:"
     )
     start = time.perf_counter()
     grpo(model, tokenizer, problems)
