@@ -39,6 +39,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward, or, with the baseline, times the reward minus its question's mean |
 | `post/ratio_clipping.py` | ratio clipping on REINFORCE with the baseline: each step's answers reused for 4 updates, each token weighted by the ratio of its probability now to when it was sampled, clipped to 1 ± 0.2 |
 | `post/grpo.py` | GRPO as DeepSeekMath wrote it: ratio clipping with each advantage divided by its question's standard deviation, each answer's tokens averaged, and a KL penalty toward the SFT model |
+| `post/rlvr.py` | GRPO with the fixes later recipes made, one at a time; so far the token-level loss: every answer token divided by the batch's answer tokens, where GRPO divides by its own answer's length |
 | `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
 | `post/simple/sft.py` | SFT at its simplest: six chat conversations, the loss on the assistant's tokens only, and a new question answered before and after |
 | `post/simple/lora.py` | LoRA at its simplest: every linear layer frozen with a trained low-rank correction next to it, taught four made-up facts |
@@ -77,7 +78,8 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/eval/reinforce.py` | runs REINFORCE from the SFT model and measures it: the reward every 5 steps, then pass@k as `post/eval/pass_at_k.py` measures the SFT model |
 | `post/eval/baseline.py` | runs REINFORCE with the baseline, each reward minus its question's mean, and measures it as `post/eval/reinforce.py` measures REINFORCE without it |
 | `post/eval/ratio_clipping.py` | runs ratio clipping from the SFT model and measures it as `post/eval/reinforce.py` measures REINFORCE, against REINFORCE and the baseline |
-| `post/eval/grpo.py` | runs GRPO as DeepSeekMath wrote it and measures it as `post/eval/ratio_clipping.py` measures ratio clipping, with the answers' length and the KL to the SFT model |
+| `post/eval/grpo.py` | runs GRPO as DeepSeekMath wrote it and measures it as `post/eval/ratio_clipping.py` measures ratio clipping, with right and wrong answers' lengths and the KL to the SFT model |
+| `post/eval/rlvr.py` | runs GRPO with the fixes so far (`post/rlvr.py`) and measures it as `post/eval/grpo.py` measures GRPO |
 | `post/eval/prompts.py` | asks everyday prompts, none of them math, before and after SFT: both answers to each, how they end, and how many end the GSM8K way |
 | `deepseek_v41_flash/` | the earlier DeepSeek-V4.1-Flash reimplementation |
 
