@@ -60,7 +60,7 @@ def ask(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> N
     for i, problem in enumerate(problems):
         prompt = render_prompt(tokenizer, [{"role": "user", "content": problem["question"]}])
         ids = torch.tensor(prompt, device=DEVICE)  # [T]
-        new_ids = generate(model, [ids], 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
+        new_ids, _ = generate(model, [ids], 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
         row = new_ids[0].tolist()  # N token ids
         answer_ids, ending = split_answer(row, endings)
         counts[ending] += 1
