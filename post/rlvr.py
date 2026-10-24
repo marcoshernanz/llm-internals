@@ -9,7 +9,7 @@ so far:
    Here every token is divided by the batch's answer tokens, so its push depends on its answer's
    advantage only (learn/2_rl/007_token_mean.py):
 
-       loss = -1/(sum_j |y_j|) sum_i sum_t min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps) A_i)
+       loss = -1/(sum_j |y_j|) sum_i sum_t min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps_high) A_i)
 
    This is DAPO's; Dr. GRPO divides by a constant instead.
 
@@ -37,6 +37,14 @@ so far:
    ROUNDS rounds, until it has QUESTIONS questions whose answers' rewards differ; what's over is
    dropped too (learn/2_rl/010_zero_gradient_filtering.py). DAPO and OLMo 3 do this. The
    alternative drops them and trains on a smaller batch.
+
+5. Clip-higher. The clip lets a token pushed up grow to at most 1 + EPSILON times its probability
+   when sampled: room in proportion to how likely it already was. An unlikely token in a right
+   answer, a step the model rarely takes, can barely grow while the likely ones grow freely, so
+   the answers narrow onto what the model already prefers. Here the upper bound is
+   1 + EPSILON_HIGH and the lower still 1 - EPSILON (learn/2_rl/011_clip_higher.py), as in DAPO,
+   whose 0.28 this takes; OLMo 3 uses 0.272. Loosening the lower bound too would let the tokens of
+   wrong answers be pushed toward 0, which narrows the answers as well.
 
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
@@ -73,6 +81,7 @@ from post.reinforce import (
 from post.sft import MAX_GRAD_NORM, Chat, join, pack, unread_gsm8k
 
 ROUNDS = 3  # at most, of QUESTIONS questions sampled per step
+EPSILON_HIGH = 0.28  # the clip's upper bound is 1 + EPSILON_HIGH, the lower 1 - EPSILON
 
 
 def mixed_rollouts(
@@ -108,6 +117,11 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
     stream = iter(problems)
     logged = []  # every sampled answer's reward since the last print
     lengths = []  # their lengths, in tokens
+    stopped_up = 0  # answer tokens the clip stopped at the upper bound, in each step's last update
+    stopped_down = 0  # and at the lower
+    up_probability = 0.0  # the sum of those at the upper's probabilities when sampled
+    probability = 0.0  # the same sum over every answer token in those updates
+    tokens = 0  # those answer tokens
     for step in range(STEPS):
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
         chats, rewards, sampled, sampled_rewards = mixed_rollouts(sampler, tokenizer, stream)
@@ -122,8 +136,15 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
                     new = token_log_probs(model, ids, mask, packing)  # [A]
                 if update == 0:
                     old.append(new.detach())
-                loss, _ = clipped_loss(new, old[k], weights[k])
+                loss, stopped = clipped_loss(new, old[k], weights[k], EPSILON_HIGH)
                 loss.backward()  # adds to the gradients of the rows before
+                if update == UPDATES - 1:
+                    up = stopped & (weights[k] > 0)  # [A], stopped at the upper bound
+                    stopped_up += int(up.sum())
+                    stopped_down += int((stopped & (weights[k] < 0)).sum())
+                    up_probability += float(old[k][up].exp().sum())
+                    probability += float(old[k].exp().sum())
+                    tokens += up.numel()
             torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -137,12 +158,21 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
             print(
                 f"step {step + 1}: reward {sum(logged) / len(logged):.3f}, "
                 f"{len(groups) / LOG_EVERY:.1f} questions sampled per step, "
-                f"{one_sided / len(groups):.0%} all right or all wrong, "
+                f"{one_sided / len(groups):.0%} all right or all wrong; clip stopped "
+                f"{stopped_up / tokens:.1%} of answer tokens at the upper bound and "
+                f"{stopped_down / tokens:.1%} at the lower in the last update, those at the upper "
+                f"{up_probability / max(stopped_up, 1):.2f} likely when sampled on average, "
+                f"every answer token {probability / tokens:.2f}; "
                 f"right answers {sum(right) / len(right):.0f} tokens, "
                 f"wrong {sum(wrong) / len(wrong):.0f}"
             )
             logged = []
             lengths = []
+            stopped_up = 0
+            stopped_down = 0
+            up_probability = 0.0
+            probability = 0.0
+            tokens = 0
 
 
 def main() -> None:
