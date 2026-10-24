@@ -9,10 +9,9 @@ Shape letters used in the comments:
 import torch
 
 from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
+from post.simple.grpo import BETA
 from post.simple.ratio_clipping import BATCHES, EPSILON, UPDATES, token_log_probs
 from post.simple.reinforce import LEARNING_RATE, PROMPT, SAMPLES, reward, sample
-
-BETA = 0.04
 
 
 def main() -> None:
@@ -41,7 +40,7 @@ def main() -> None:
             objective = (
                 torch.minimum(ratios * advantages, clipped * advantages) - BETA * kl
             )  # [N, A]
-            loss = -objective.mean(dim=-1).mean()
+            loss = -objective.mean()
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
