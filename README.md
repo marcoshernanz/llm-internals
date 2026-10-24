@@ -11,6 +11,7 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
   - A batched KV-cache sampler: 836 tokens per second at batch 64 on a T4.
   - Full-parameter SFT with an assistant-only loss and packed sequences, no padding, on GSM8K mixed with smol-smoltalk. Asked the first 50 GSM8K test questions zero-shot in chat format, answers that close their turn go from 0% to 96% and right answers from 6% to 52%.
   - The head fused with the cross-entropy, a chunk of positions at a time: 4,096-token steps fit in 18.7 GiB on an L4, where the plain loss runs out of memory.
+- **The learning part** (`learn/`): the post-training mechanisms again at their simplest, to read rather than run. Each ladder is a folder of numbered files, each file the one before it plus one mechanism, so `diff` shows the mechanism alone. `learn/README.md` explains how it works.
 
 ## Layout
 
@@ -39,19 +40,11 @@ A minimal, from-scratch implementation of how a modern LLM works: model, pre-tra
 | `post/reinforce.py` | REINFORCE: each step the model answers GSM8K questions, each answer gets a reward of 1 if right and 0 if not, and the loss is minus each answer's log probability times its reward, or, with the baseline, times the reward minus its question's mean |
 | `post/ratio_clipping.py` | ratio clipping on REINFORCE with the baseline: each step's answers reused for 4 updates, each token weighted by the ratio of its probability now to when it was sampled, clipped to 1 ± 0.2 |
 | `post/grpo.py` | GRPO as DeepSeekMath wrote it: ratio clipping with each advantage divided by its question's standard deviation, each answer's tokens averaged, and a KL penalty toward the SFT model |
-| `post/rlvr.py` | GRPO with the fixes later recipes made, one at a time; so far the token-level loss: every answer token divided by the batch's answer tokens, where GRPO divides by its own answer's length |
+| `post/rlvr.py` | GRPO with the fixes later recipes made, one at a time; so far the token-level loss, every answer token divided by the batch's answer tokens where GRPO divides by its own answer's length, and no division of the advantage by its question's standard deviation |
 | `post/rejection_sampling.py` | rejection sampling: the SFT model answers GSM8K questions it never read, the right answers are kept, and the base model is fine-tuned again on SFT's data plus them |
-| `post/simple/sft.py` | SFT at its simplest: six chat conversations, the loss on the assistant's tokens only, and a new question answered before and after |
-| `post/simple/lora.py` | LoRA at its simplest: every linear layer frozen with a trained low-rank correction next to it, taught four made-up facts |
-| `post/simple/nf4.py` | NF4 at its simplest: each block of 64 weights as indices into 16 normal-quantile levels and a scale, the scales quantized again; the model's loss before and after |
-| `post/simple/qlora.py` | QLoRA at its simplest: the LoRA of `post/simple/lora.py` on linear layers stored in NF4 and dequantized in each forward pass |
-| `post/simple/baseline.py` | REINFORCE with a baseline at its simplest: `post/simple/reinforce.py` with each reward minus the group's mean reward, so wrong samples are pushed down and a group with equal rewards pushes nothing |
-| `post/simple/ratio_clipping.py` | ratio clipping at its simplest: `post/simple/baseline.py` with each batch of samples reused for 4 updates, each token weighted by the ratio of its new probability to its old one, clipped to 1 ± 0.2; run clipped and not clipped |
-| `post/simple/grpo.py` | GRPO at its simplest: `post/simple/ratio_clipping.py` with each advantage divided by the group's standard deviation, each sample's tokens averaged, and a KL penalty toward the model it started from |
-| `post/simple/token_mean.py` | the token-level loss at its simplest: `post/simple/grpo.py` with the loss averaged over every token in the batch at once, where GRPO averages each sample's tokens first |
-| `post/simple/rejection_sampling.py` | rejection sampling at its simplest: sample 64 completions, keep the ones the reward accepts, fine-tune on them, repeat |
-| `post/simple/pass_at_k.py` | pass@k at its simplest: 32 samples for each of four prompts, and the chance that k of them include a right one |
-| `post/simple/reinforce.py` | REINFORCE at its simplest, standalone: 16 completions of one prompt sampled token by token, a reward of 1 for any that says "dog", and the loss minus the mean of reward times log probability |
+| `learn/README.md` | the learning part: how its files are written, read and added |
+| `learn/1_finetuning/` | SFT, LoRA, NF4 and QLoRA at their simplest, one numbered file each, indexed in its `README.md` |
+| `learn/2_rl/` | pass@k, rejection sampling, REINFORCE, the baseline, ratio clipping, GRPO and its fixes at their simplest, each file the one before plus one mechanism, indexed in its `README.md` |
 | `post/check/qwen3.py` | checks `post/qwen3.py` gives the same logits as `transformers` |
 | `post/check/attention.py` | checks the fused attention kernel against attention written out step by step, with and without a cache |
 | `post/check/kv_cache.py` | checks the KV cache gives the same logits as rerunning the whole sequence |
@@ -124,4 +117,4 @@ Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
 3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and RMSNorm (forward, backward and autograd) are done.
-4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT, LoRA and QLoRA are done; rejection sampling is next.
+4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT, LoRA and QLoRA, and rejection sampling are done; RL with verifiable rewards is under way, from REINFORCE to GRPO and the fixes later recipes made.
