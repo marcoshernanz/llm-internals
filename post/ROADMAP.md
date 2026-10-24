@@ -345,7 +345,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The IFEval-style graders first: skipped. They came first because their reward is non-zero from step one, and our SFT model already gets 25% of GSM8K at temperature 1.
   - The environment interface: deferred to stage 5, when there's a second task.
   - Per-token log-probs from the sampler: ratio clipping takes its old log-probs from the trainer instead, as frontier trainers do. The sampler's wait for the sampler-trainer mismatch.
-  - The KL term: GRPO starts without it, as DAPO and Dr. GRPO do. DeepSeek V3.2 keeps a corrected KL instead.
+  - The KL term: GRPO keeps it as DeepSeekMath wrote it, and removing it is one of the fixes. DAPO and Dr. GRPO remove it; DeepSeek V3.2 keeps a corrected KL instead.
 - **REINFORCE** (done, `post/reinforce.py`):
   - Each step, the model answers 8 GSM8K train questions SFT never read, 8 samples each at temperature 1.
   - Reward: 1 if the answer closed its turn and is right by strict grading, 0 if not.
@@ -378,24 +378,46 @@ Each stage starts from a problem we can see in the previous stage's output.
     - Every pass@k is a little higher, and more so at large k: 1.0 point at pass@1, 2.8 at pass@8. That's within the noise of 200 questions, but it leans the way the toy does. REINFORCE pushes up whichever right answers it happened to sample, which narrows them. The baseline pushes up only answers that beat their question's average, and pushes the others down.
     - The answers shortened less, from 110 to 98 tokens, where REINFORCE's went from 112 to 90.
     - 10.1 minutes, 15.2 seconds per step, peak 17.3 GiB: the baseline costs nothing.
-- **GRPO: ratio clipping** (done, `post/grpo.py`): sampling is most of each step, and its answers get one gradient step. Here they get 4. From the second update on, the model training on them is no longer the one that sampled them, so each answer token is weighted by its ratio, its probability now over its probability when sampled, clipped to 1 ± 0.2 in the direction its advantage pushes. On the first update every ratio is 1, and the gradient is the baseline's.
+- **Ratio clipping** (done, `post/ratio_clipping.py`): sampling is most of each step, and its answers get one gradient step. Here they get 4. From the second update on, the model training on them is no longer the one that sampled them, so each answer token is weighted by its ratio, its probability now over its probability when sampled, clipped to 1 ± 0.2 in the direction its advantage pushes. On the first update every ratio is 1, and the gradient is the baseline's.
   - The old log-probs are the trainer's own, from the first update's forward pass, where the weights are still those that sampled.
   - The loss needs each target's log-probability, not just their sum. `TokenLogProbs` in `post/linear_cross_entropy.py` returns them in chunks, and computes the logits again in the backward pass rather than keep them. The check (`post/check/loss.py`): on the same signed scales, its gradient is as close to the exact one as the plain loss's (1.5% and 1.5% over all weights).
   - No division by the group's standard deviation and no KL term, as in Dr. GRPO and DAPO. Each answer's tokens are summed, as Dr. GRPO does, where GRPO averaged them.
-  - The toy (`post/simple/grpo.py`): by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
-  - GSM8K (`post/eval/grpo.py`), the same start and test questions, 20 steps of 4 updates:
+  - The toy (`post/simple/ratio_clipping.py`): by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
+  - GSM8K (`post/eval/ratio_clipping.py`), the same start and test questions, 20 steps of 4 updates:
 
     |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
     |---|---|---|---|---|---|---|---|---|
     | REINFORCE, 40 steps | 52% | 34.2% | 47.7% | 61.0% | 72.8% | 83.0% | 34 | 7 |
     | with the baseline, 40 steps | 52% | 35.2% | 49.1% | 62.9% | 75.6% | 85.0% | 30 | 5 |
-    | GRPO, 20 steps × 4 updates | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
+    | ratio clipping, 20 steps × 4 updates | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
 
     - From half the sampled answers, 1,280 against 2,560, it goes further than either: 5.8 points at pass@1, the largest gap yet. It also took twice the gradient steps, 80 against 40.
     - 22.6 seconds per step, against the baseline's 15.2, so each extra update costs about 2.5 seconds and sampling about 13. That's why reuse pays: a gradient step on answers already sampled costs a fifth as much as sampling new ones.
     - The clip stopped 1.4%, 1.9%, 2.5% and then 3.2% of answer tokens in each step's last update, over 5 steps at a time. At a learning rate of 2e-6 it rarely binds. Whether it matters here would take the same run without it, which the toy already shows.
     - The training reward, over 5 steps at a time: 0.325, 0.425, 0.403, 0.569.
     - 7.5 minutes, peak 17.3 GiB. 96% of answers close their turn.
+- **GRPO as DeepSeekMath wrote it** (done, `post/grpo.py`): ratio clipping plus the three other things in DeepSeekMath's loss. Later recipes undo each one.
+  - Each advantage is divided by the standard deviation of its question's rewards, plus 1e-4 so a question whose answers all score the same stays at 0.
+  - Each answer's tokens are averaged, so every answer counts the same however long.
+  - A KL penalty toward a frozen copy of the SFT model, weight 0.04. Each token's estimate is p_ref/p − log(p_ref/p) − 1: computed from the sampled token alone, never negative, and 0 where the two models agree.
+  - DeepSeekMath trained at 1e-6 with 64 answers per question and one update per batch, so its clip never acted. This keeps ratio clipping's 2e-6, 8 answers and 4 updates, so the three additions are all that differs.
+  - The toy (`post/simple/grpo.py`) first ran with AdamW's default weight decay of 0.01. Its first batch had every reward 0, and it ended with a KL of 423 per token.
+    - With every advantage 0 and the model equal to the reference, the gradient is exactly 0. But weight decay still shrinks every weight, by a factor of 1e-7.
+    - That gives the KL a gradient of norm 8.5e-6. Adam divides each weight's gradient by its own running size, so the step is far bigger than the gradient: the largest log-prob gap to the reference went from 0.00003 to 0.42.
+    - Then the gradient is real, but Adam's step is still about one learning rate per weight, however small the correction needed. It overshoots to a gap of 10.9.
+    - With weight decay 0, as every full-size run here uses, nothing moves until a sample is right. The reward then pulls the model away, to a KL of 1.44. Once nearly every sample is right and the advantages fade, the KL pulls it back, to 0.55.
+  - GSM8K (`post/eval/grpo.py`): the same start, questions and steps as ratio clipping.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | with the baseline, 40 steps | 52% | 35.2% | 49.1% | 62.9% | 75.6% | 85.0% | 30 | 5 |
+    | ratio clipping, 20 steps × 4 updates | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
+    | GRPO as DeepSeekMath wrote it | 57% | 38.9% | 52.7% | 66.0% | 78.2% | 89.0% | 22 | 7 |
+
+    - Against ratio clipping: pass@1 2.1 points lower, pass@16 1.5 higher, and 3 fewer questions with none right. It sharpens less and leaves more answers reachable, as a pull toward the SFT model would. But that's within the noise of 200 questions, and three things changed at once. The fixes take them out one at a time.
+    - The training reward rose more slowly on the same questions: 0.328, 0.372, 0.425, 0.494, against 0.325, 0.425, 0.403, 0.569.
+    - The KL per answer token, over 5 steps at a time: 0.009, 0.015, 0.033, 0.050, still rising. The answers stayed about as long: 109, 111, 99, 105 tokens. 94% close their turn.
+    - 8.3 minutes, 24.9 seconds per step against 22.6, peak 19.5 GiB against 17.3: the reference model, 2.4 GB in fp32, and its forward pass over each row.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
