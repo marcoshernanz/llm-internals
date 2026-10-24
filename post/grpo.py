@@ -87,7 +87,7 @@ def grpo(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
     for step in range(STEPS):
         batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
-        chats, rewards = rollouts(sampler, tokenizer, batch)
+        chats, rewards, _ = rollouts(sampler, tokenizer, batch)
         rows = pack(chats)
         answer_lengths = [sum(answer) for _, answer in chats]
         token_advantages = token_weights(rows, advantages(rewards), 1)
