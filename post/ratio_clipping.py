@@ -85,7 +85,7 @@ def ratio_clipping(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, 
     for step in range(STEPS):
         batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
-        chats, rewards = rollouts(sampler, tokenizer, batch)
+        chats, rewards, _ = rollouts(sampler, tokenizer, batch)
         rows = pack(chats)
         weights = token_weights(rows, advantages(rewards), len(chats))
         old = []  # each row's log probabilities from the weights that sampled
