@@ -1,13 +1,14 @@
 """Run modules of this repo on a Kaggle T4, one after another in one session.
 Run with ``uv run python kaggle_run.py post.check.kv_cache post.eval.gsm8k``.
 
-A Kaggle kernel is a single script, so the local ``post`` and ``core`` sources, uncommitted changes
-included, are written into it; on Kaggle's machine it writes them back out as files and runs each
-module with ``python -m``. The kernel is private, on a machine with two T4s (the modules use the
-first), with internet on to download the model and datasets. It runs on Kaggle's own Python and
-PyTorch, not the versions in uv.lock: theirs are built for Kaggle's GPUs, and installing ours would
-download a few GB every session. The log streams here while it runs. Afterwards each module's log,
-and any files a module wrote to ``out/``, come back to ``out/kaggle/output/``.
+A Kaggle kernel is a single script, so the local ``post``, ``core`` and ``learn`` sources,
+uncommitted changes included, are written into it; on Kaggle's machine it writes them back out as
+files and runs each module with ``python -m``. The kernel is private, on a machine with two T4s
+(the modules use the first), with internet on to download the model and datasets. It runs on
+Kaggle's own Python and PyTorch, not the versions in uv.lock: theirs are built for Kaggle's GPUs,
+and installing ours would download a few GB every session. The log streams here while it runs.
+Afterwards each module's log, and any files a module wrote to ``out/``, come back to
+``out/kaggle/output/``.
 The session runs on without this script: ``uv run python kaggle_run.py --follow`` picks up a running
 session's log again, then its output.
 """
@@ -25,7 +26,7 @@ from kagglesdk.kernels.types.kernels_enums import KernelWorkerStatus
 
 OWNER = "marcoshernanz"
 SLUG = "deepseek-v41-flash-run"
-PACKAGES = ["post", "core"]
+PACKAGES = ["post", "core", "learn"]
 KERNEL_DIR = Path("out/kaggle/kernel")
 OUTPUT_DIR = Path("out/kaggle/output")
 TIMEOUT_SECONDS = 3 * 60 * 60  # stops a stuck run long before Kaggle's 12-hour limit
