@@ -35,14 +35,16 @@ from torch import Tensor
 from post.qwen3 import KVCache, Qwen3
 
 
-def sample(logits: Tensor, temperature: float) -> Tensor:  # [B, V]
-    """One next token per row, each drawn from its own row's distribution. Temperature 0 always
-    picks the likeliest token."""
+def sample(logits: Tensor, temperature: float) -> tuple[Tensor, Tensor]:  # [B, V]
+    """One next token per row, each drawn from its own row's distribution, and its log probability
+    in that distribution. Temperature 0 always picks the likeliest token, with probability 1."""
     if temperature == 0:
-        return logits.argmax(dim=-1, keepdim=True)  # [B, 1]
+        ids = logits.argmax(dim=-1, keepdim=True)  # [B, 1]
+        return ids, torch.zeros(ids.shape, device=ids.device)  # [B, 1], [B, 1]
     scaled = logits.float() / temperature  # [B, V], below 1 sharpens, above 1 flattens
-    probs = scaled.softmax(dim=-1)  # [B, V]
-    return torch.multinomial(probs, num_samples=1)  # [B, 1]
+    log_probs = scaled.log_softmax(dim=-1)  # [B, V]
+    ids = torch.multinomial(log_probs.exp(), num_samples=1)  # [B, 1]
+    return ids, log_probs.gather(-1, ids)  # [B, 1], [B, 1]
 
 
 def new_caches(model: Qwen3, batch_size: int, max_len: int) -> list[KVCache]:
@@ -55,10 +57,11 @@ def new_caches(model: Qwen3, batch_size: int, max_len: int) -> list[KVCache]:
 
 
 def prefill(
-    model: Qwen3, prompts: list[Tensor], max_len: int, pad_id: int
+    model: Qwen3, prompts: list[Tensor], max_len: int, pad_id: int, head: Tensor | None = None
 ) -> tuple[Tensor, list[KVCache]]:  # P of [T_p]
     """Read the prompts in one batch, each padded on the left to the longest with pad_id, which is
-    never attended to; return each prompt's next-token logits and the caches holding them."""
+    never attended to; return each prompt's next-token logits and the caches holding them. head
+    is the model's (post/qwen3.py)."""
     longest = max(prompt.size(0) for prompt in prompts)
     device = prompts[0].device
     lengths = torch.tensor([prompt.size(0) for prompt in prompts], device=device)  # [P]
@@ -69,7 +72,7 @@ def prefill(
     caches = new_caches(model, len(prompts), max_len)
     for cache in caches:
         cache.real[:, :longest] = real  # [P, T] written into [P, L]
-    logits = model(ids, caches, last_only=True)  # [P, 1, V], the prompts read once
+    logits = model(ids, caches, last_only=True, head=head)  # [P, 1, V], the prompts read once
     return logits[:, -1], caches  # [P, V]
 
 
@@ -81,26 +84,30 @@ def generate(
     max_new_tokens: int,
     temperature: float,
     stop_ids: list[int],
-) -> Tensor:  # P of [T_p]
+    head: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:  # P of [T_p]
     """Sample up to max_new_tokens tokens after each prompt, in samples rows each: prompt p's rows
     are p * samples to (p + 1) * samples - 1. A row that writes one of stop_ids is done: it stays
     in the batch, so the shapes don't change, but every token after it is the first of stop_ids.
-    Stop when every row is done."""
+    Stop when every row is done. Return the new tokens and each one's log probability in the
+    distribution it was drawn from. head is the model's (post/qwen3.py)."""
     longest = max(prompt.size(0) for prompt in prompts)
     stops = torch.tensor(stop_ids, device=prompts[0].device)  # [S]
-    logits, caches = prefill(model, prompts, longest + max_new_tokens, stop_ids[0])  # [P, V]
+    logits, caches = prefill(model, prompts, longest + max_new_tokens, stop_ids[0], head)  # [P, V]
     for cache in caches:
         cache.repeat_rows(samples)  # [P, G, L, Dh] -> [B, G, L, Dh], each prompt in its rows
     logits = logits.repeat_interleave(samples, dim=0)  # [B, V], a prompt's rows start the same
     done = torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)  # [B]
     new_ids = []  # one [B, 1] per step
+    new_log_probs = []  # one [B, 1] per step
     while True:
-        next_ids = sample(logits, temperature)  # [B, 1], each row draws its own
+        next_ids, log_probs = sample(logits, temperature)  # [B, 1] each, each row draws its own
         next_ids = next_ids.masked_fill(done.unsqueeze(1), stop_ids[0])  # [B, 1], done: a stop
         new_ids.append(next_ids)
+        new_log_probs.append(log_probs)  # a done row's mean nothing: its tokens are cut
         done = done | torch.isin(next_ids.squeeze(1), stops)  # [B], wrote any of the stop ids
         if done.all() or len(new_ids) == max_new_tokens:
             break
-        logits = model(next_ids, caches)  # [B, 1, V], each row reads only its newest token
+        logits = model(next_ids, caches, head=head)  # [B, 1, V], each row reads only its newest
         logits = logits[:, -1]  # [B, V]
-    return torch.cat(new_ids, dim=1)  # [B, N]
+    return torch.cat(new_ids, dim=1), torch.cat(new_log_probs, dim=1)  # [B, N], [B, N]
