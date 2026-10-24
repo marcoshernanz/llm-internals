@@ -50,7 +50,7 @@ def clipped_loss(
     new: Tensor, old: Tensor, weights: Tensor
 ) -> tuple[Tensor, Tensor]:  # [A], [A], [A]
     """The loss over one row's answer tokens, and which tokens the clip stopped. weights is each
-    token's answer's advantage over N."""
+    token's answer's advantage over N here, over the batch's answer tokens in post/rlvr.py."""
     ratios = (new - old).exp()  # [A]
     clipped = ratios.clamp(1 - EPSILON, 1 + EPSILON)  # [A]
     objective = torch.minimum(ratios * weights, clipped * weights)  # [A]
