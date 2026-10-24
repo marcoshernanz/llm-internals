@@ -365,9 +365,9 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The training reward, over 5 steps at a time: 0.287, 0.300, 0.322, 0.425, 0.353, 0.438, 0.341, 0.366. Each window has different questions, so it's noisy.
   - The answers got shorter, 112 tokens on average to 90, and more of them close their turn: 98%, from 93%. An answer that runs to the token limit gets no reward.
   - With rewards of 1 and 0, every wrong answer gets weight 0: at a reward of about 0.35, two thirds of each step's sampled answers teach nothing. That's the next problem: a baseline.
-- **Simple versions** (`post/simple/`): one bare file per mechanism, with no packing, fused loss, cache or batching tricks, on toy prompts. REINFORCE on "My favorite animal is the", with a reward of 1 for "dog", reaches 1.0 by step 4, then collapses to "dog because he is my dog because he": once every reward is 1, every sample is pushed up, whatever it says.
+- **Simple versions** (`learn/`, how they're written in `learn/README.md`): one bare, numbered file per mechanism, each the file before it plus that mechanism, with no packing, fused loss, cache or batching tricks, on toy prompts. REINFORCE on "My favorite animal is the", with a reward of 1 for "dog", reaches 1.0 by step 4, then collapses to "dog because he is my dog because he": once every reward is 1, every sample is pushed up, whatever it says.
 - **The baseline** (done, `baseline=True` in `post/reinforce.py`): each answer's weight is its reward minus the mean reward of its question's 8 answers. Wrong answers are pushed down, and a question whose answers all score the same pushes nothing. GRPO also divides by the group's standard deviation; Dr. GRPO drops that, and so does this, for now.
-  - The toy (`post/simple/baseline.py`): the same 1.0 by step 4, but no collapse. Through step 29 the answers stay varied: "dog that is easy to take care of", "dog and dog is remarkable because I can".
+  - The toy (`learn/2_rl/004_baseline.py`): the same 1.0 by step 4, but no collapse. Through step 29 the answers stay varied: "dog that is easy to take care of", "dog and dog is remarkable because I can".
   - GSM8K (`post/eval/baseline.py`), the same start, questions and 40 steps as REINFORCE:
 
     |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
@@ -382,7 +382,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The old log-probs are the trainer's own, from the first update's forward pass, where the weights are still those that sampled.
   - The loss needs each target's log-probability, not just their sum. `TokenLogProbs` in `post/linear_cross_entropy.py` returns them in chunks, and computes the logits again in the backward pass rather than keep them. The check (`post/check/loss.py`): on the same signed scales, its gradient is as close to the exact one as the plain loss's (1.5% and 1.5% over all weights).
   - No division by the group's standard deviation and no KL term, as in Dr. GRPO and DAPO. Each answer's tokens are summed, as Dr. GRPO does, where GRPO averaged them.
-  - The toy (`post/simple/ratio_clipping.py`): by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
+  - The toy (`learn/2_rl/005_ratio_clipping.py`), when it still ran a second, unclipped pass: by batch 2 the largest ratio is 66.3 clipped and 399.6 not clipped. Without the clip, the answers narrow to "dog\nHere is…".
   - GSM8K (`post/eval/ratio_clipping.py`), the same start and test questions, 20 steps of 4 updates:
 
     |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
@@ -401,7 +401,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - Each answer's tokens are averaged, so every answer counts the same however long.
   - A KL penalty toward a frozen copy of the SFT model, weight 0.04. Each token's estimate is p_ref/p − log(p_ref/p) − 1: computed from the sampled token alone, never negative, and 0 where the two models agree.
   - DeepSeekMath trained at 1e-6 with 64 answers per question and one update per batch, so its clip never acted. This keeps ratio clipping's 2e-6, 8 answers and 4 updates, so the three additions are all that differs.
-  - The toy (`post/simple/grpo.py`) first ran with AdamW's default weight decay of 0.01. Its first batch had every reward 0, and it ended with a KL of 423 per token.
+  - The toy (`learn/2_rl/006_grpo.py`) first ran with AdamW's default weight decay of 0.01. Its first batch had every reward 0, and it ended with a KL of 423 per token.
     - With every advantage 0 and the model equal to the reference, the gradient is exactly 0. But weight decay still shrinks every weight, by a factor of 1e-7.
     - That gives the KL a gradient of norm 8.5e-6. Adam divides each weight's gradient by its own running size, so the step is far bigger than the gradient: the largest log-prob gap to the reference went from 0.00003 to 0.42.
     - Then the gradient is real, but Adam's step is still about one learning rate per weight, however small the correction needed. It overshoots to a gap of 10.9.
@@ -419,11 +419,11 @@ Each stage starts from a problem we can see in the previous stage's output.
     - The KL per answer token, over 5 steps at a time: 0.009, 0.015, 0.033, 0.050, still rising. The answers stayed about as long: 109, 111, 99, 105 tokens. 94% close their turn.
     - 8.3 minutes, 24.9 seconds per step against 22.6, peak 19.5 GiB against 17.3: the reference model, 2.4 GB in fp32, and its forward pass over each row.
 - **The fixes**, one at a time, by fix rather than by paper: Dr. GRPO makes two of them and DAPO four, so a file per paper would change several things at once. Each fix gets a problem logged first, then the fix.
-  - Simple: one standalone file per fix, `post/simple/grpo.py` with that one change, run both ways.
+  - Simple: one numbered file per fix in `learn/2_rl/`, each the file before it plus that fix.
   - Full: `post/grpo.py` stays the original. `post/rlvr.py` starts as a copy and takes the fixes in order, so it ends as the recipe the frontier converged on.
   - Order: the token-level loss, no standard-deviation division (Dr. GRPO), no KL, zero-gradient groups filtered, clip-higher (DAPO), then truncated importance sampling with an fp32 output layer. DAPO's soft length penalty is left out: our reward already scores an answer that runs out of room 0.
 - **1. The token-level loss** (done, `post/rlvr.py`). GRPO averages each answer's tokens, so each token's push is its answer's advantage over N and the answer's length: inside a long answer, the push is spread thin. Wrong answers' tokens are pushed down less the longer they are, and right answers' pushed up more the shorter they are. The fix divides every token by the batch's answer tokens (DAPO's, the most common). Dr. GRPO divides by a constant instead.
-  - The toy (`post/simple/token_mean.py`): `post/simple/grpo.py` with `-objective.mean()`, every token in the batch averaged at once, in place of `-objective.mean(dim=-1).mean()`. Every toy sample is 8 tokens, so the two give the same number: the toy shows the formula, and GSM8K's answers, each its own length, show the difference.
+  - The toy (`learn/2_rl/007_token_mean.py`): `006_grpo.py` with `-objective.mean()`, every token in the batch averaged at once, in place of `-objective.mean(dim=-1).mean()`. Every toy sample is 8 tokens, so the two give the same number: the toy shows the formula, and GSM8K's answers, each its own length, show the difference.
   - GSM8K: `post/rlvr.py` starts as a copy of `post/grpo.py`, and the one change is each token's scale, 1 over the batch's answer tokens where GRPO's is 1 over N and its answer's length. Both log right and wrong answers' lengths over 5 steps at a time; `post.grpo` ran again for that, and its weights replaced the saved "grpo".
 
     |  | right answers, tokens | wrong answers, tokens | reward |
@@ -442,6 +442,20 @@ Each stage starts from a problem we can see in the previous stage's output.
 
     - The same pass@1, a point or two higher from pass@4 on: within the noise of 200 questions. Greedy is one answer per question, so 5 points is 10 questions.
     - 8.1 minutes, 24.4 seconds per step, peak 19.6 GiB: the fix costs nothing. 94% of answers close their turn.
+- **2. No division by the standard deviation** (done, `post/rlvr.py`). With rewards of 1 and 0, a question's standard deviation is the square root of p (1 - p), p the share of its answers that are right: dividing by it scales up the questions whose answers are most one-sided, and the training no longer follows the gradient of the expected reward. The fix is the baseline's advantage, the reward minus its question's mean (Dr. GRPO, OLMo 3). The alternative divides by the whole batch's standard deviation, which keeps the scale without favoring any question.
+  - The toy (`learn/2_rl/008_no_std.py`): `007_token_mean.py` with the division taken out of its advantage line. It has one prompt, so one group: there the division only scales the whole batch by one number, which Adam all but ignores. The problem is between questions, so only GSM8K has it.
+  - GSM8K: `post/rlvr.py` takes `advantages` from `post/reinforce.py` instead of `post/grpo.py`.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | GRPO as DeepSeekMath wrote it | 57% | 38.9% | 52.7% | 66.0% | 78.2% | 89.0% | 22 | 7 |
+    | with the token-level loss | 52% | 38.7% | 53.7% | 67.6% | 79.9% | 90.0% | 20 | 3 |
+    | and no standard deviation | 51% | 34.2% | 49.2% | 63.5% | 75.6% | 85.5% | 29 | 1 |
+
+    - Worse: 4.5 points at pass@1 and at pass@16, back where REINFORCE with the baseline was. The training reward rose more slowly too: 0.272, 0.375, 0.434, 0.494, against 0.294, 0.381, 0.463, 0.547.
+    - The KL to the SFT model ended at 0.026 per answer token, against 0.043: the model moved less. With rewards of 1 and 0 the standard deviation is at most about 0.5, so the division always enlarged the advantages, about doubling them at least. Without it, the KL penalty at the same weight, 0.04, counts at least twice as much against the reward. Adam ignores the loss's overall scale, but not the balance between its two terms.
+    - So the fixes interact: the KL weight was set for advantages divided by the standard deviation. That's the next problem: the KL holding the model back, which step 3 removes.
+    - Right answers 84, 76, 85, 81 tokens, wrong 120, 118, 101, 113, as with the first fix alone. 7.8 minutes, 23.3 seconds per step, peak 19.5 GiB. 96% of answers close their turn.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
