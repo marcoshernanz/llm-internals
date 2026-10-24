@@ -30,6 +30,14 @@ so far:
    the token-level loss (learn/2_rl/009_no_kl.py), as in DAPO, Dr. GRPO and OLMo 3. DeepSeek-R1
    kept a small one, of weight 0.001, and replaced its copy with the current model every 400 steps.
 
+4. No questions that push nothing. A question whose answers all score the same, all right or all
+   wrong, has every advantage 0. Its answers push nothing, but they cost their sampling and their
+   passes, and their tokens still count in the total every token's push is divided by, so they
+   shrink the rest's. Here a step drops those questions and samples QUESTIONS more, for at most
+   ROUNDS rounds, until it has QUESTIONS questions whose answers' rewards differ; what's over is
+   dropped too (learn/2_rl/010_zero_gradient_filtering.py). DAPO and OLMo 3 do this. The
+   alternative drops them and trains on a smaller batch.
+
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
 
@@ -37,6 +45,8 @@ Shape letters used in the comments:
     T   tokens in a packed row
     A   of them, the answer tokens, the targets the loss counts
 """
+
+from collections.abc import Iterator
 
 import torch
 from tokenizers import Tokenizer
@@ -52,8 +62,41 @@ from post.qwen3 import (
     save_weights,
 )
 from post.ratio_clipping import STEPS, UPDATES, clipped_loss, token_weights
-from post.reinforce import LEARNING_RATE, LOG_EVERY, QUESTIONS, advantages, rollouts
-from post.sft import MAX_GRAD_NORM, join, pack, unread_gsm8k
+from post.reinforce import (
+    LEARNING_RATE,
+    LOG_EVERY,
+    QUESTIONS,
+    SAMPLES,
+    advantages,
+    rollouts,
+)
+from post.sft import MAX_GRAD_NORM, Chat, join, pack, unread_gsm8k
+
+ROUNDS = 3  # at most, of QUESTIONS questions sampled per step
+
+
+def mixed_rollouts(
+    sampler: Qwen3, tokenizer: Tokenizer, problems: Iterator[dict[str, str]]
+) -> tuple[list[Chat], list[float], list[Chat], list[float]]:
+    """The answers and rewards of QUESTIONS questions whose answers' rewards differ, then every
+    answer sampled to find them, with its reward, for the logs."""
+    kept_chats: list[Chat] = []
+    kept_rewards: list[float] = []
+    all_chats: list[Chat] = []
+    all_rewards: list[float] = []
+    for _ in range(ROUNDS):
+        chats, rewards = rollouts(sampler, tokenizer, [next(problems) for _ in range(QUESTIONS)])
+        all_chats += chats
+        all_rewards += rewards
+        for start in range(0, len(chats), SAMPLES):  # a question's answers come together
+            group = rewards[start : start + SAMPLES]
+            if min(group) < max(group):  # some right, some wrong: not every advantage is 0
+                kept_chats += chats[start : start + SAMPLES]
+                kept_rewards += group
+        if len(kept_chats) >= QUESTIONS * SAMPLES:
+            break
+    count = QUESTIONS * SAMPLES
+    return kept_chats[:count], kept_rewards[:count], all_chats, all_rewards
 
 
 def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
@@ -62,12 +105,12 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
     )
-    logged = []  # the rewards since the last print
-    lengths = []  # the answers' lengths since then, in tokens
+    stream = iter(problems)
+    logged = []  # every sampled answer's reward since the last print
+    lengths = []  # their lengths, in tokens
     for step in range(STEPS):
-        batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
-        chats, rewards = rollouts(sampler, tokenizer, batch)
+        chats, rewards, sampled, sampled_rewards = mixed_rollouts(sampler, tokenizer, stream)
         rows = pack(chats)
         answer_lengths = [sum(answer) for _, answer in chats]
         weights = token_weights(rows, advantages(rewards), sum(answer_lengths))  # over all of them
@@ -84,13 +127,17 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
             torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-        logged += rewards
-        lengths += answer_lengths
+        logged += sampled_rewards
+        lengths += [sum(answer) for _, answer in sampled]
         if (step + 1) % LOG_EVERY == 0:
             right = [n for n, r in zip(lengths, logged) if r]
             wrong = [n for n, r in zip(lengths, logged) if not r]
+            groups = [logged[k : k + SAMPLES] for k in range(0, len(logged), SAMPLES)]
+            one_sided = sum(min(group) == max(group) for group in groups)
             print(
                 f"step {step + 1}: reward {sum(logged) / len(logged):.3f}, "
+                f"{len(groups) / LOG_EVERY:.1f} questions sampled per step, "
+                f"{one_sided / len(groups):.0%} all right or all wrong, "
                 f"right answers {sum(right) / len(right):.0f} tokens, "
                 f"wrong {sum(wrong) / len(wrong):.0f}"
             )
@@ -102,7 +149,7 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)  # fp32: the master copy of the weights
     load_weights(model, "sft")
-    rlvr(model, tokenizer, unread_gsm8k(STEPS * QUESTIONS))
+    rlvr(model, tokenizer, unread_gsm8k(ROUNDS * STEPS * QUESTIONS))
     save_weights(model, "rlvr")
 
 
