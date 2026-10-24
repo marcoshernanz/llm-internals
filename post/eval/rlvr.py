@@ -35,6 +35,11 @@ GRPO = (
     "GRPO: greedy 57%; pass@1 38.9%, pass@2 52.7%, pass@4 66.0%, pass@8 78.2%, pass@16 89.0%; "
     "22 with none right, 7 with all"
 )
+# this file's run with the first fix only
+TOKEN_LEVEL = (
+    "with the token-level loss: greedy 52%; pass@1 38.7%, pass@2 53.7%, pass@4 67.6%, "
+    "pass@8 79.9%, pass@16 90.0%; 20 with none right, 3 with all"
+)
 
 
 def main() -> None:
@@ -44,7 +49,8 @@ def main() -> None:
     load_weights(model, "sft")
     problems = unread_gsm8k(STEPS * QUESTIONS)
     print(
-        f"GRPO with the token-level loss, from the SFT model: {STEPS} steps of {QUESTIONS} GSM8K "
+        f"GRPO with the token-level loss and no division by the standard deviation, from the SFT "
+        f"model: {STEPS} steps of {QUESTIONS} GSM8K "
         f"train questions SFT didn't read, {SAMPLES} answers each at temperature {TEMPERATURE}, "
         f"{UPDATES} updates per step, ratios clipped to 1 ± {EPSILON}, KL weight {BETA}; "
         f"learning rate {LEARNING_RATE:g}. The reward, right and wrong answers' lengths and the KL, "
@@ -58,10 +64,8 @@ def main() -> None:
     save_weights(model, "rlvr")
 
     model.to(torch.bfloat16)  # bf16 weights for generation, as the checkpoint came
-    print(f"\n{SFT}\n{RATIO_CLIPPING}\n{GRPO}")
-    print(
-        f"after GRPO with the token-level loss, on the first {TEST_QUESTIONS} GSM8K test questions"
-    )
+    print(f"\n{SFT}\n{RATIO_CLIPPING}\n{GRPO}\n{TOKEN_LEVEL}")
+    print(f"after GRPO with both fixes, on the first {TEST_QUESTIONS} GSM8K test questions")
     measure(model, tokenizer, load_gsm8k("test")[:TEST_QUESTIONS])
 
 
