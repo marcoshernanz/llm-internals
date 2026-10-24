@@ -20,20 +20,23 @@ BATCHES = 8
 UPDATES = 4
 EPSILON_LOW = 0.2
 EPSILON_HIGH = 0.28
+CAP = 2.0
 
 
 def reward(text: str) -> float:
     return 1.0 if "dog" in text else 0.0
 
 
-def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> tuple[Tensor, Tensor]:  # [P]
     ids = prompt.repeat(samples, 1)  # [N, P]
+    log_probs = []
     for _ in range(NEW_TOKENS):
         logits = model(ids)[:, -1]  # [N, V]
         probs = logits.softmax(dim=-1)  # [N, V]
         next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
+        log_probs.append(probs.gather(-1, next_ids).log())  # [N, 1]
         ids = torch.cat([ids, next_ids], dim=1)  # [N, T]
-    return ids  # [N, T]
+    return ids, torch.cat(log_probs, dim=1)  # [N, T], [N, A]
 
 
 def token_log_probs(model: Qwen3, ids: Tensor, prompt_len: int) -> Tensor:  # [N, T]
@@ -54,8 +57,9 @@ def main() -> None:
 
     for batch in range(BATCHES):
         with torch.no_grad():
-            ids = sample(model, prompt, SAMPLES)  # [N, T]
+            ids, sampled_log_probs = sample(model, prompt, SAMPLES)  # [N, T], [N, A]
             old_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
+            importance = (old_log_probs - sampled_log_probs).exp().clamp(max=CAP)  # [N, A]
         texts = [tokenizer.decode(row) for row in ids[:, len(prompt) :].tolist()]
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
         advantages = (rewards - rewards.mean())[:, None]  # [N, 1]
@@ -66,7 +70,9 @@ def main() -> None:
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
             ratios = (new_log_probs - old_log_probs).exp()  # [N, A]
             clipped = ratios.clamp(1 - EPSILON_LOW, 1 + EPSILON_HIGH)  # [N, A]
-            objective = torch.minimum(ratios * advantages, clipped * advantages)  # [N, A]
+            objective = importance * torch.minimum(
+                ratios * advantages, clipped * advantages
+            )  # [N, A]
             loss = -objective.mean()
             loss.backward()
             optimizer.step()
