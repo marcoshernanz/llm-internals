@@ -19,7 +19,6 @@ LEARNING_RATE = 1e-5
 BATCHES = 8
 UPDATES = 4
 EPSILON = 0.2
-BETA = 0.04
 
 
 def reward(text: str) -> float:
@@ -49,7 +48,6 @@ def main() -> None:
     torch.manual_seed(0)
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)
-    reference = load_qwen3(REPO_ID, torch.float32, DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.0)
     prompt = torch.tensor(tokenizer.encode(PROMPT).ids, device=DEVICE)  # [P]
 
@@ -57,7 +55,6 @@ def main() -> None:
         with torch.no_grad():
             ids = sample(model, prompt, SAMPLES)  # [N, T]
             old_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
-            ref_log_probs = token_log_probs(reference, ids, len(prompt))  # [N, A]
         texts = [tokenizer.decode(row) for row in ids[:, len(prompt) :].tolist()]
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
         advantages = (rewards - rewards.mean())[:, None]  # [N, 1]
@@ -66,20 +63,13 @@ def main() -> None:
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
             ratios = (new_log_probs - old_log_probs).exp()  # [N, A]
             clipped = ratios.clamp(1 - EPSILON, 1 + EPSILON)  # [N, A]
-            log_ref_ratios = ref_log_probs - new_log_probs  # [N, A]
-            kl = log_ref_ratios.exp() - log_ref_ratios - 1  # [N, A]
-            objective = (
-                torch.minimum(ratios * advantages, clipped * advantages) - BETA * kl
-            )  # [N, A]
+            objective = torch.minimum(ratios * advantages, clipped * advantages)  # [N, A]
             loss = -objective.mean()
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
 
-        print(
-            f"batch {batch}: reward {rewards.mean().item():.2f}, "
-            f"KL {kl.mean().item():.3f}  {texts[0]!r}"
-        )
+        print(f"batch {batch}: reward {rewards.mean().item():.2f}  {texts[0]!r}")
 
 
 if __name__ == "__main__":
