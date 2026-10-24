@@ -9,8 +9,7 @@ so far:
    Here every token is divided by the batch's answer tokens, so its push depends on its answer's
    advantage only (learn/2_rl/007_token_mean.py):
 
-       loss = -1/(sum_j |y_j|) sum_i sum_t [min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps) A_i)
-                                            - beta KL_i,t]
+       loss = -1/(sum_j |y_j|) sum_i sum_t min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps) A_i)
 
    This is DAPO's; Dr. GRPO divides by a constant instead.
 
@@ -22,6 +21,14 @@ so far:
    the baseline's (post/reinforce.py, learn/2_rl/008_no_std.py), as in Dr. GRPO and OLMo 3:
 
        A_i = R_i - mean(R)
+
+3. No KL penalty. GRPO pulls the model toward a frozen copy of the model it started from. That
+   guards training on a learned reward model, which the model can learn to fool with answers it
+   scores high but that are wrong. A checked reward reads the number the question asks for, so
+   there's nothing to fool: the pull only holds the model back, and the copy costs its memory and
+   a forward pass over every row. Without it, this is ratio clipping (post/ratio_clipping.py) with
+   the token-level loss (learn/2_rl/009_no_kl.py), as in DAPO, Dr. GRPO and OLMo 3. DeepSeek-R1
+   kept a small one, of weight 0.001, and replaced its copy with the current model every 400 steps.
 
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
@@ -35,7 +42,6 @@ import torch
 from tokenizers import Tokenizer
 
 from post.chat import token_log_probs
-from post.grpo import grpo_loss, token_kl
 from post.qwen3 import (
     DEVICE,
     REPO_ID,
@@ -45,7 +51,7 @@ from post.qwen3 import (
     load_weights,
     save_weights,
 )
-from post.ratio_clipping import STEPS, UPDATES, token_weights
+from post.ratio_clipping import STEPS, UPDATES, clipped_loss, token_weights
 from post.reinforce import LEARNING_RATE, LOG_EVERY, QUESTIONS, advantages, rollouts
 from post.sft import MAX_GRAD_NORM, join, pack, unread_gsm8k
 
@@ -53,25 +59,18 @@ from post.sft import MAX_GRAD_NORM, join, pack, unread_gsm8k
 def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
     """Train the model on STEPS steps of QUESTIONS problems each, UPDATES updates per step."""
     sampler = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # the copy that samples
-    reference = load_qwen3(REPO_ID, torch.float32, DEVICE)  # the KL penalty's anchor
-    reference.load_state_dict(model.state_dict())  # the model as training starts, never trained
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
     )
     logged = []  # the rewards since the last print
     lengths = []  # the answers' lengths since then, in tokens
-    kl_total = 0.0  # the KL estimates on every answer token of every update since then
-    tokens = 0  # those answer tokens
     for step in range(STEPS):
         batch = problems[step * QUESTIONS : (step + 1) * QUESTIONS]
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
         chats, rewards = rollouts(sampler, tokenizer, batch)
         rows = pack(chats)
         answer_lengths = [sum(answer) for _, answer in chats]
-        token_advantages = token_weights(rows, advantages(rewards), 1)
-        scales = token_weights(rows, [1.0] * len(chats), sum(answer_lengths))  # 1 / all of them
-        with torch.no_grad(), torch.autocast(DEVICE, dtype=torch.bfloat16):
-            references = [token_log_probs(reference, *join(row)) for row in rows]  # [A] each
+        weights = token_weights(rows, advantages(rewards), sum(answer_lengths))  # over all of them
         old = []  # each row's log probabilities from the weights that sampled
         for update in range(UPDATES):
             for k, row in enumerate(rows):
@@ -80,11 +79,8 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
                     new = token_log_probs(model, ids, mask, packing)  # [A]
                 if update == 0:
                     old.append(new.detach())
-                kl = token_kl(new, references[k])  # [A]
-                loss = grpo_loss(new, old[k], kl, token_advantages[k], scales[k])
+                loss, _ = clipped_loss(new, old[k], weights[k])
                 loss.backward()  # adds to the gradients of the rows before
-                kl_total += float(kl.detach().sum())
-                tokens += kl.numel()
             torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -96,13 +92,10 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
             print(
                 f"step {step + 1}: reward {sum(logged) / len(logged):.3f}, "
                 f"right answers {sum(right) / len(right):.0f} tokens, "
-                f"wrong {sum(wrong) / len(wrong):.0f}, "
-                f"KL {kl_total / tokens:.5f} per answer token"
+                f"wrong {sum(wrong) / len(wrong):.0f}"
             )
             logged = []
             lengths = []
-            kl_total = 0.0
-            tokens = 0
 
 
 def main() -> None:
