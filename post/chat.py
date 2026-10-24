@@ -86,15 +86,20 @@ def scaled_loss(
 
 
 def token_log_probs(
-    model: Qwen3, ids: Tensor, mask: Tensor, packing: Packing | None = None
+    model: Qwen3,
+    ids: Tensor,
+    mask: Tensor,
+    packing: Packing | None = None,
+    fp32_head: bool = False,
 ) -> Tensor:  # [B, T], [B, T]
     """The log probability of each true next token the mask counts, [A], with no logits kept
-    (post/linear_cross_entropy.py)."""
+    (post/linear_cross_entropy.py). With fp32_head, the head's matmuls run in fp32."""
     hidden = model.hidden(ids, packing=packing)  # [B, T, D]
     hidden = hidden[:, :-1]  # [B, T-1, D], the last token has no target
     targets = ids[:, 1:]  # [B, T-1]
     counted = mask[:, 1:]  # [B, T-1]
-    return TokenLogProbs.apply(hidden[counted], model.embed_tokens.weight, targets[counted])
+    weight = model.embed_tokens.weight  # [V, D], the head
+    return TokenLogProbs.apply(hidden[counted], weight, targets[counted], fp32_head)
 
 
 def sft_loss(
@@ -114,21 +119,29 @@ def answer_ids(
     samples: int,
     temperature: float,
     max_new_tokens: int,
-) -> list[list[list[int]]]:
+    head: Tensor | None = None,
+) -> tuple[list[list[list[int]]], list[list[list[float]]]]:
     """samples answers to each question, asked zero-shot as a user turn, several questions at a
-    time. An answer is its token ids up to the token it stopped at, kept."""
+    time. An answer is its token ids up to the token it stopped at, kept. Also each answer token's
+    log probability in the distribution it was drawn from. head is the model's (post/qwen3.py)."""
     stop_ids = [token_id(tokenizer, token) for token in STOPS]
     rows = []
+    row_log_probs = []
     per_batch = ROWS // samples  # questions
     for start in range(0, len(questions), per_batch):
         batch = questions[start : start + per_batch]
         prompts = [render_prompt(tokenizer, [{"role": "user", "content": q}]) for q in batch]
         prompts_t = [torch.tensor(prompt, device=DEVICE) for prompt in prompts]  # each [T]
-        new_ids = generate(model, prompts_t, samples, max_new_tokens, temperature, stop_ids)
-        for row in new_ids.tolist():  # B rows of N ids
+        new_ids, new_log_probs = generate(
+            model, prompts_t, samples, max_new_tokens, temperature, stop_ids, head
+        )  # [B, N] each
+        for row, log_probs in zip(new_ids.tolist(), new_log_probs.tolist()):  # B rows of N
             ends = [i for i, token in enumerate(row) if token in stop_ids]
-            rows.append(row[: ends[0] + 1] if ends else row)  # up to the first stop, if any
-    return [rows[i : i + samples] for i in range(0, len(rows), samples)]
+            end = ends[0] + 1 if ends else len(row)  # up to the first stop, if any
+            rows.append(row[:end])
+            row_log_probs.append(log_probs[:end])
+    groups = range(0, len(rows), samples)
+    return [rows[i : i + samples] for i in groups], [row_log_probs[i : i + samples] for i in groups]
 
 
 def answers(
@@ -140,7 +153,7 @@ def answers(
     max_new_tokens: int,
 ) -> list[list[str]]:
     """The answers of answer_ids as text: one that ends in <|im_end|> closed its turn."""
-    sampled = answer_ids(model, tokenizer, questions, samples, temperature, max_new_tokens)
+    sampled, _ = answer_ids(model, tokenizer, questions, samples, temperature, max_new_tokens)
     return [
         [tokenizer.decode(ids, skip_special_tokens=False) for ids in group] for group in sampled
     ]
