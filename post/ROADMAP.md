@@ -418,6 +418,13 @@ Each stage starts from a problem we can see in the previous stage's output.
     - The training reward rose more slowly on the same questions: 0.328, 0.372, 0.425, 0.494, against 0.325, 0.425, 0.403, 0.569.
     - The KL per answer token, over 5 steps at a time: 0.009, 0.015, 0.033, 0.050, still rising. The answers stayed about as long: 109, 111, 99, 105 tokens. 94% close their turn.
     - 8.3 minutes, 24.9 seconds per step against 22.6, peak 19.5 GiB against 17.3: the reference model, 2.4 GB in fp32, and its forward pass over each row.
+- **The fixes**, one at a time, by fix rather than by paper: Dr. GRPO makes two of them and DAPO four, so a file per paper would change several things at once. Each fix gets a problem logged first, then the fix.
+  - Simple: one standalone file per fix, `post/simple/grpo.py` with that one change, run both ways.
+  - Full: `post/grpo.py` stays the original. `post/rlvr.py` starts as a copy and takes the fixes in order, so it ends as the recipe the frontier converged on.
+  - Order: the token-level loss, no standard-deviation division (Dr. GRPO), no KL, zero-gradient groups filtered, clip-higher (DAPO), then truncated importance sampling with an fp32 output layer. DAPO's soft length penalty is left out: our reward already scores an answer that runs out of room 0.
+- **1. The token-level loss** (in progress). GRPO averages each answer's tokens, so each token's push is its answer's advantage over N and the answer's length: inside a long answer, the push is spread thin. Wrong answers' tokens are pushed down less the longer they are, and right answers' pushed up more the shorter they are. The fix divides every token by the batch's answer tokens (DAPO's, the most common). Dr. GRPO divides by a constant instead.
+  - The toy (`post/simple/token_mean.py`): reward 1 for a sample that starts with "dog", so what follows can't earn reward. Samples stop at their first period, 16 tokens at most. With each sample's tokens averaged, right samples collapse to " dog.", 2.0 to 3.5 tokens over the last 6 batches. With every token in the batch averaged together, they stay at 4.1 to 7.0.
+  - Wrong samples grow under the average, 5.8 to 15.0 tokens by batch 7, but swing as much with the fix. Late in each run only one to four of 16 are wrong, so that half doesn't show in one run.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
