@@ -41,7 +41,7 @@ def answers(model: Qwen3, tokenizer: Tokenizer) -> list[str]:
     for prompt in PROMPTS:
         ids = render_prompt(tokenizer, [{"role": "user", "content": prompt}])
         ids_t = torch.tensor(ids, device=DEVICE)  # [T]
-        new_ids = generate(model, [ids_t], 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
+        new_ids, _ = generate(model, [ids_t], 1, MAX_NEW_TOKENS, 0.0, stop_ids)  # [1, N]
         texts.append(tokenizer.decode(new_ids[0].tolist(), skip_special_tokens=False))
     return texts
 
