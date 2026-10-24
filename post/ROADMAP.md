@@ -515,6 +515,31 @@ Each stage starts from a problem we can see in the previous stage's output.
 
     - pass@1 3.8 points lower. The change can only reach tokens whose ratio lands between 1.2 and 1.28, a sliver of under 1% of tokens, and nothing here measures how much two runs with the same settings differ in pass@1. So this is most likely noise, and clip-higher's benefit, keeping the answers from narrowing over long runs, is out of reach in 20 steps. The training reward was lower too: 0.365, 0.345, 0.397, 0.382, against 0.340, 0.391, 0.475, 0.427.
     - 11.5 minutes, 34.4 seconds per step, peak 17.3 GiB: the fix costs nothing. Right answers 84, 76, 78, 78 tokens, wrong 122, 106, 110, 108. 96% of answers close their turn.
+- **6. Truncated importance sampling, with fp32 output layers** (done, `post/rlvr.py`). The sampler, a bf16 copy, and the trainer, fp32 weights with bf16 matmuls, give the same tokens slightly different probabilities, so the answers come from a model a little different from the one the loss assumes: tokens the sampler draws more often than the trainer would are pushed more often than they should be. Each token is weighted by the trainer's probability over the sampler's, the one it drew the token with, capped at 2 so that no token dominates (OLMo 3, after Yao et al.). And both output layers run in fp32, which MiniMax-M1 found closed most of its gap.
+  - Plumbing: `post/sampler.py`'s `sample` and `generate` return each drawn token's log probability, in the distribution it was drawn from, and `answer_ids` and `rollouts` pass them on. `Qwen3.forward` takes an output layer other than its own: the sampler's is the trainer's fp32 embedding table, read live. `TokenLogProbs` runs its head in fp32 with `fp32_head`, with autocast off: inside autocast a matmul runs in bf16 whatever its inputs, so the first version's fp32 head changed nothing.
+  - The problem, measured (`post/eval/sampler_gap.py`): 256 answers from the SFT model, about 28,000 tokens, and the trainer's log probability of each token against the sampler's.
+
+    | sampler's output layer | trainer's | apart in log probability, on average | largest ratio |
+    |---|---|---|---|
+    | bf16 | bf16 | 0.0188 | 1.40 |
+    | bf16 | fp32 | 0.0168 | 1.37 |
+    | fp32 | bf16 | 0.0164 | 1.34 |
+    | fp32 | fp32 | 0.0121 | 1.35 |
+
+    - Both in fp32 bring the two about a third closer; the rest comes from everything else the sampler runs in bf16. No token in either case is off by a factor of 2: here the sampler is our own code, the trainer's model in bf16, where frontier samplers are inference engines with kernels of their own.
+  - The toy (`learn/2_rl/012_truncated_importance_sampling.py`): `011_clip_higher.py` whose `sample` also returns each drawn token's log probability, an `importance` line, and `importance *` in the objective. Its sampler is the model itself, so every weight is 1 up to rounding: the run gives 011's rewards and samples, batch for batch.
+  - GSM8K: the trainer and the sampler were 0.0099 to 0.0114 apart in log probability on average, over 5 steps at a time. No weight was capped; the largest was 1.49 to 1.71. So the weights move each token's push by about 1%.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | the first four fixes | 53% | 41.6% | 56.1% | 68.4% | 78.5% | 86.5% | 27 | 9 |
+    | and clip-higher | 52% | 37.8% | 51.7% | 64.8% | 76.4% | 85.5% | 29 | 10 |
+    | and truncated importance sampling | 46% | 38.4% | 52.3% | 64.5% | 74.3% | 81.0% | 38 | 9 |
+
+    - Greedy 6 points lower and pass@16 4.5 lower, with 38 questions none of 16 right against 29. Weights within about 1% of 1 can't account for that much, and nothing here measures how much two runs with the same settings differ: that's the next thing to measure, before reading any more of these tables.
+    - Every answer token's probability when sampled rose from 0.73 to 0.80, against 0.70 to 0.76 with clip-higher alone: the model sharpened more.
+    - 12.3 minutes, 36.8 seconds per step against 34.4: the fp32 output layers cost about 2.4 seconds a step. Peak 17.0 GiB. Right answers 81, 75, 75, 80 tokens, wrong 123, 108, 97, 106. 97% of answers close their turn.
+- **Where the fixes leave `post/rlvr.py`:** ratio clipping with the token-level loss, the baseline's advantage, no KL, zero-gradient filtering, clip-higher and truncated importance sampling with fp32 output layers: OLMo 3's objective, sampled in steps rather than asynchronously.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
