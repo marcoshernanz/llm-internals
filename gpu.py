@@ -1,13 +1,13 @@
 """Run modules of this repo on a cloud GPU, an NVIDIA L4 on Modal, one after another in one
 container. Run with ``uv run modal run gpu.py --modules post.check.kv_cache,post.eval.gsm8k``.
 
-The local ``core`` and ``post`` packages are copied in on every run, so uncommitted changes run too,
-on the versions in uv.lock. Each module runs in its own process, so one module's compiled code or
-memory doesn't carry into the next. Its output streams here and is saved to ``out/<module>.log``;
-files a module writes to ``out/`` come back to the local ``out/`` too. One container for all the
-modules pays the startup and the model download once. At the end it prints how long it waited
-for a GPU, how long it ran, and what that cost: Modal bills the running time only. Weights a
-module saves to ``/checkpoints``, a Modal Volume, stay there for later runs to load.
+The local ``core``, ``post`` and ``learn`` packages are copied in on every run, so uncommitted
+changes run too, on the versions in uv.lock. Each module runs in its own process, so one module's
+compiled code or memory doesn't carry into the next. Its output streams here and is saved to
+``out/<module>.log``; files a module writes to ``out/`` come back to the local ``out/`` too. One
+container for all the modules pays the startup and the model download once. At the end it prints
+how long it waited for a GPU, how long it ran, and what that cost: Modal bills the running time
+only. Weights a module saves to ``/checkpoints``, a Modal Volume, stay there for later runs to load.
 """
 
 import subprocess
@@ -26,7 +26,7 @@ CHECKPOINTS = "/checkpoints"  # weights a module saves there stay for later runs
 image = modal.Image.debian_slim(python_version="3.14")
 image = image.uv_sync()  # uv.lock's versions, dev group too: post.check.qwen3 needs transformers
 image = image.env({"HF_HUB_DISABLE_PROGRESS_BARS": "1"})
-image = image.add_local_python_source("core", "post")
+image = image.add_local_python_source("core", "post", "learn")
 app = modal.App("deepseek-v4-1-flash", image=image)
 volume = modal.Volume.from_name("deepseek-v4-1-flash-checkpoints", create_if_missing=True)
 
