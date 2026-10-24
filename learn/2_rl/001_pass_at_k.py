@@ -3,14 +3,15 @@ Shape letters used in the comments:
     N   samples per prompt
     P   prompt tokens
     T   tokens: the prompt, then the sampled ones
+    V   vocabulary size
 """
 
 import math
 
 import torch
+from torch import Tensor
 
-from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
-from post.simple.reinforce import sample
+from post.qwen3 import DEVICE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
 
 PROMPTS = [
     ("My favorite animal is the", "dog"),
@@ -19,7 +20,18 @@ PROMPTS = [
     ("My favorite season is", "autumn"),
 ]
 SAMPLES = 32
+NEW_TOKENS = 8
 KS = [1, 2, 4, 8, 16]
+
+
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
+    ids = prompt.repeat(samples, 1)  # [N, P]
+    for _ in range(NEW_TOKENS):
+        logits = model(ids)[:, -1]  # [N, V]
+        probs = logits.softmax(dim=-1)  # [N, V]
+        next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
+        ids = torch.cat([ids, next_ids], dim=1)  # [N, T]
+    return ids  # [N, T]
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
