@@ -48,7 +48,7 @@ def naive_generate(
         start = time.perf_counter()
         logits = model(ids)  # [1, T, V], the whole sequence again
         logits = logits[:, -1]  # [1, V], only the last position predicts the next token
-        next_id = sample(logits, TEMPERATURE)  # [1, 1]
+        next_id, _ = sample(logits, TEMPERATURE)  # [1, 1]
         ids = torch.cat([ids, next_id], dim=1)  # [1, T+1]
         stop = next_id.item() == stop_id  # .item() waits for the GPU, so the timing is real
         seconds.append(time.perf_counter() - start)
@@ -79,7 +79,7 @@ def time_sampler(model: Qwen3, prompt: Tensor, stop_id: int) -> None:  # [T]
         generate(model, [prompt], batch_size, NEW_TOKENS, TEMPERATURE, [stop_id])  # compiles
         first_run = time.perf_counter() - start
         start = time.perf_counter()
-        new_ids = generate(
+        new_ids, _ = generate(
             model, [prompt], batch_size, NEW_TOKENS, TEMPERATURE, [stop_id]
         )  # [B, N]
         torch.cuda.synchronize()  # wait for the GPU, so the timing is real
@@ -103,7 +103,7 @@ def main() -> None:
     time_sampler(model, prompt, stop_id)
 
     torch.manual_seed(0)
-    new_ids = generate(model, [prompt], SAMPLES, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
+    new_ids, _ = generate(model, [prompt], SAMPLES, NEW_TOKENS, TEMPERATURE, [stop_id])  # [B, N]
     print(f"\n{PROMPT}")
     for i, row in enumerate(new_ids.tolist()):
         answer = tokenizer.decode(row)
