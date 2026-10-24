@@ -58,6 +58,8 @@ def main() -> None:
         texts = [tokenizer.decode(row) for row in ids[:, len(prompt) :].tolist()]
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
         advantages = (rewards - rewards.mean())[:, None]  # [N, 1]
+        if (advantages == 0).all():
+            continue
 
         for _ in range(UPDATES):
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
