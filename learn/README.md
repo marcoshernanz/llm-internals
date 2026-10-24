@@ -42,7 +42,7 @@ A mechanism usually lands in both parts: its full version in `post/`, with its r
 `post/ROADMAP.md`, and its file here.
 
 1. Copy the folder's last file to the next number, named after the new mechanism:
-   `cp learn/2_rl/010_zero_gradient_filtering.py learn/2_rl/011_<mechanism>.py`.
+   `cp learn/2_rl/011_clip_higher.py learn/2_rl/012_<mechanism>.py`.
 2. Change only what the mechanism needs.
 3. `diff` it against the file before. Every changed line must belong to the mechanism.
 4. Add its row and its section to the folder's `README.md`: the problem, the fix, the change, and
