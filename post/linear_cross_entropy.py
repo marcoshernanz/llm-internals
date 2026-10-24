@@ -24,11 +24,11 @@ computed, so the gradient coming back into it is a single number, 1 unless the l
 backward pass only multiplies by it.
 Matmuls in bf16, as autocast runs them; the softmax in fp32.
 
-GRPO's clipped loss (post/grpo.py) needs each target's log probability itself, since it weights
-each token by how far its probability has moved, so the gradient can't be computed before the loss
-is. TokenLogProbs returns them, a chunk at a time, and keeps no logits: the backward pass computes
-each chunk's logits again, one more matmul, and from the gradient coming into each log probability
-g, the logits' gradient, g (onehot(y) - softmax(z)).
+The clipped loss (post/ratio_clipping.py, post/grpo.py) needs each target's log probability, as
+it weights each token by how far its probability has moved, so the gradient can't be computed
+before the loss is. TokenLogProbs returns them, a chunk at a time, and keeps no logits: the
+backward pass computes each chunk's logits again, one more matmul, and from the gradient coming
+into each log probability g, the logits' gradient, g (onehot(y) - softmax(z)).
 
 Shape letters used in the comments:
     A   positions whose target counts
