@@ -9,7 +9,7 @@ sampled, and the ratio is clipped to 1 ± EPSILON in the direction its advantage
     r_i,t = p(y_i,t | x_i, y_i,<t) / p_old(y_i,t | x_i, y_i,<t)
 
 On the first update every ratio is 1 and the gradient is REINFORCE's with the baseline. A token
-pushed past its bound gets no more gradient from this batch (post/simple/ratio_clipping.py). The
+pushed past its bound gets no more gradient from this batch (learn/2_rl/005_ratio_clipping.py). The
 old log probabilities are the trainer's own, from the first update's forward pass, where the
 weights are those that sampled: frontier trainers compute them again too, rather than trust the
 inference engine's. post/grpo.py adds the rest of GRPO as DeepSeekMath wrote it: the division by
