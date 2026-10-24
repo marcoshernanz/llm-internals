@@ -4,14 +4,45 @@ Shape letters used in the comments:
     P   prompt tokens
     T   tokens: the prompt, then the sampled ones
     A   sampled tokens per sample, T - P
+    V   vocabulary size
 """
 
 import torch
+from torch import Tensor
 
-from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
-from post.simple.grpo import BETA
-from post.simple.ratio_clipping import BATCHES, EPSILON, UPDATES, token_log_probs
-from post.simple.reinforce import LEARNING_RATE, PROMPT, SAMPLES, reward, sample
+from post.qwen3 import DEVICE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
+
+PROMPT = "My favorite animal is the"
+SAMPLES = 16
+NEW_TOKENS = 8
+LEARNING_RATE = 1e-5
+BATCHES = 8
+UPDATES = 4
+EPSILON = 0.2
+BETA = 0.04
+
+
+def reward(text: str) -> float:
+    return 1.0 if "dog" in text else 0.0
+
+
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
+    ids = prompt.repeat(samples, 1)  # [N, P]
+    for _ in range(NEW_TOKENS):
+        logits = model(ids)[:, -1]  # [N, V]
+        probs = logits.softmax(dim=-1)  # [N, V]
+        next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
+        ids = torch.cat([ids, next_ids], dim=1)  # [N, T]
+    return ids  # [N, T]
+
+
+def token_log_probs(model: Qwen3, ids: Tensor, prompt_len: int) -> Tensor:  # [N, T]
+    logits = model(ids[:, :-1])  # [N, T-1, V]
+    log_probs = logits.log_softmax(dim=-1)  # [N, T-1, V]
+    targets = ids[:, 1:, None]  # [N, T-1, 1]
+    picked = log_probs.gather(-1, targets)  # [N, T-1, 1]
+    picked = picked.squeeze(-1)  # [N, T-1]
+    return picked[:, prompt_len - 1 :]  # [N, A]
 
 
 def main() -> None:
