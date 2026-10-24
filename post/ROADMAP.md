@@ -493,6 +493,28 @@ Each stage starts from a problem we can see in the previous stage's output.
     - About the same scores: pass@1 1.1 points higher, within the noise of 200 questions. 20 steps is too short to see the share of all-right questions grow as the model improves, which is when the filter matters most.
     - The cost: 34.8 seconds per step against 22.5. Most steps sample a second round, and a round of sampling costs about 13 seconds. 11.6 minutes in all, and the whole run with its evaluation took 16.7, close to the 20-minute limit. The rewards aren't comparable step for step with earlier runs: after the first round a step takes questions the earlier runs never saw.
     - Peak 17.3 GiB, as before. Right answers 83, 85, 79, 80 tokens, wrong 117, 111, 111, 116. 96% of answers close their turn.
+- **5. Clip-higher** (done, `post/rlvr.py`). The clip lets a token pushed up grow to at most 1 + ε times its probability when sampled, so its room to grow is a share of how likely it already was: an unlikely token in a right answer can barely grow while the likely ones grow freely, and the answers narrow onto what the model already prefers. The fix raises only the upper bound, to 1 + 0.28 (DAPO; OLMo 3 uses 0.272), and keeps the lower at 1 - 0.2: loosening it too would let the tokens of wrong answers be pushed toward 0, which narrows the answers as well.
+  - The toy (`learn/2_rl/011_clip_higher.py`): `010_zero_gradient_filtering.py` with `EPSILON` split into `EPSILON_LOW` and `EPSILON_HIGH`, and the clamp taking both.
+  - GSM8K: `post/ratio_clipping.py`'s `clipped_loss` takes the upper bound as an argument, and `post/rlvr.py` passes 0.28. It logs, in each step's last update, the share of answer tokens the clip stopped at each bound, and how likely those at the upper bound were when sampled, against every answer token.
+
+    |  | stopped at the upper bound | at the lower | probability when sampled, stopped at the upper | every answer token |
+    |---|---|---|---|---|
+    | steps 1-5 | 0.3% | 0.7% | 0.11 | 0.70 |
+    | steps 6-10 | 0.6% | 1.5% | 0.09 | 0.71 |
+    | steps 11-15 | 0.6% | 1.6% | 0.11 | 0.73 |
+    | steps 16-20 | 0.8% | 2.3% | 0.13 | 0.76 |
+
+    - The problem, measured: the tokens the upper bound stops are the unlikely ones, 0.09 to 0.13 likely when sampled against about 0.7 for every answer token, even with the bound at 1.28.
+    - The narrowing shows too: every answer token's probability when sampled rises from 0.70 to 0.76 in 20 steps, the model ever surer of its own answers. Whether clip-higher slows that would take the same log from a run with the old bound.
+    - The lower bound stops 2 to 3 times as many tokens as the upper.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | the first four fixes | 53% | 41.6% | 56.1% | 68.4% | 78.5% | 86.5% | 27 | 9 |
+    | and clip-higher | 52% | 37.8% | 51.7% | 64.8% | 76.4% | 85.5% | 29 | 10 |
+
+    - pass@1 3.8 points lower. The change can only reach tokens whose ratio lands between 1.2 and 1.28, a sliver of under 1% of tokens, and nothing here measures how much two runs with the same settings differ in pass@1. So this is most likely noise, and clip-higher's benefit, keeping the answers from narrowing over long runs, is out of reach in 20 steps. The training reward was lower too: 0.365, 0.345, 0.397, 0.382, against 0.340, 0.391, 0.475, 0.427.
+    - 11.5 minutes, 34.4 seconds per step, peak 17.3 GiB: the fix costs nothing. Right answers 84, 76, 78, 78 tokens, wrong 122, 106, 110, 108. 96% of answers close their turn.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
