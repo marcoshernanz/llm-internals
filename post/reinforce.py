@@ -13,7 +13,7 @@ weight: it's rejection sampling (post/rejection_sampling.py) on every step, alwa
 model's own answers.
 
 With baseline, each answer's reward is replaced by its advantage: the reward minus the mean reward
-of the 8 answers to the same question (post/simple/baseline.py). The baseline changes nothing on
+of the 8 answers to the same question (learn/2_rl/004_baseline.py). The baseline changes nothing on
 average, since the gradient of the probabilities' sum, 1, is 0. But a right answer among wrong ones
 is pushed up, the wrong ones are pushed down, and a question whose answers all score the same
 pushes nothing. GRPO's advantage also divides by the group's standard deviation; Dr. GRPO drops
