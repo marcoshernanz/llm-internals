@@ -113,9 +113,12 @@ def grpo(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
         logged += rewards
         lengths += answer_lengths
         if (step + 1) % LOG_EVERY == 0:
+            right = [n for n, r in zip(lengths, logged) if r]
+            wrong = [n for n, r in zip(lengths, logged) if not r]
             print(
                 f"step {step + 1}: reward {sum(logged) / len(logged):.3f}, "
-                f"answers {sum(lengths) / len(lengths):.0f} tokens, "
+                f"right answers {sum(right) / len(right):.0f} tokens, "
+                f"wrong {sum(wrong) / len(wrong):.0f}, "
                 f"KL {kl_total / tokens:.5f} per answer token"
             )
             logged = []
