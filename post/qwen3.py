@@ -341,12 +341,16 @@ class Qwen3(nn.Module):
         caches: list[KVCache] | None = None,
         last_only: bool = False,
         packing: Packing | None = None,
+        head: Tensor | None = None,
     ) -> Tensor:  # [B, T]
         """The logits, a row of V = 151,936 numbers for each position. With last_only, only the
-        last position gets them: it alone predicts the next token."""
+        last position gets them: it alone predicts the next token. With head, [V, D], the logits
+        come from those weights, in their dtype, in place of the embedding table's."""
         x = self.hidden(ids, caches, packing)  # [B, T, D]
         if last_only:
             x = x[:, -1:]  # [B, 1, D], so T is 1 below
+        if head is not None:
+            return F.linear(x.to(head.dtype), head)  # [B, T, V]
         return F.linear(x, self.embed_tokens.weight)  # [B, T, V], the head is the embedding table
 
 
