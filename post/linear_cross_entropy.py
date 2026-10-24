@@ -93,45 +93,53 @@ class LinearCrossEntropy(torch.autograd.Function):
 
 
 class TokenLogProbs(torch.autograd.Function):
-    """Each target's log probability with the head W, a chunk of positions at a time."""
+    """Each target's log probability with the head W, a chunk of positions at a time. With
+    fp32_head, the head's matmuls run in fp32, so the logits aren't rounded to bf16's 8 bits of
+    precision (post/rlvr.py)."""
 
     @staticmethod
-    def forward(ctx: Any, hidden: Tensor, weight: Tensor, targets: Tensor) -> Tensor:
+    def forward(
+        ctx: Any, hidden: Tensor, weight: Tensor, targets: Tensor, fp32_head: bool
+    ) -> Tensor:
         # [A, D], [V, D], [A]
         count = targets.size(0)
-        weight16 = weight.to(torch.bfloat16)  # [V, D]
+        dtype = torch.float32 if fp32_head else torch.bfloat16
+        head = weight.to(dtype)  # [V, D]
         log_probs = torch.empty(count, device=hidden.device)  # [A], fp32
-        for start in range(0, count, CHUNK):
-            end = min(start + CHUNK, count)
-            h = hidden[start:end].to(torch.bfloat16)  # [C, D]
-            y = targets[start:end]  # [C]
-            rows = torch.arange(end - start, device=hidden.device)  # [C]
-            z = (h @ weight16.T).float()  # [C, V], the chunk's logits, the softmax in fp32
-            log_probs[start:end] = z[rows, y] - z.logsumexp(dim=-1)  # [C]
+        with torch.autocast(hidden.device.type, enabled=False):  # it would run fp32 in bf16
+            for start in range(0, count, CHUNK):
+                end = min(start + CHUNK, count)
+                h = hidden[start:end].to(dtype)  # [C, D]
+                y = targets[start:end]  # [C]
+                rows = torch.arange(end - start, device=hidden.device)  # [C]
+                z = (h @ head.T).float()  # [C, V], the chunk's logits, the softmax in fp32
+                log_probs[start:end] = z[rows, y] - z.logsumexp(dim=-1)  # [C]
         ctx.save_for_backward(hidden, weight, targets)
+        ctx.dtype = dtype
         return log_probs
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None]:
+    def backward(ctx: Any, *grad_outputs: Tensor) -> tuple[Tensor, Tensor | None, None, None]:
         (grad_log_probs,) = grad_outputs  # [A], the gradient coming into each log probability
         hidden, weight, targets = ctx.saved_tensors  # [A, D], [V, D], [A]
         count = targets.size(0)
-        weight16 = weight.to(torch.bfloat16)  # [V, D]
+        head = weight.to(ctx.dtype)  # [V, D]
         grad_hidden = torch.empty_like(hidden)  # [A, D]
         grad_weight = None  # [V, D]: the chunks' sum, if the head trains
         if ctx.needs_input_grad[1]:
             grad_weight = torch.zeros_like(weight, dtype=torch.float32)  # [V, D]
-        for start in range(0, count, CHUNK):
-            end = min(start + CHUNK, count)
-            h = hidden[start:end].to(torch.bfloat16)  # [C, D]
-            y = targets[start:end]  # [C]
-            rows = torch.arange(end - start, device=hidden.device)  # [C]
-            z = (h @ weight16.T).float()  # [C, V], the chunk's logits again
-            z = z.softmax(dim=-1)  # [C, V]
-            z[rows, y] -= 1  # [C, V], softmax - onehot: minus each log probability's dz
-            z *= -grad_log_probs[start:end, None]  # [C, V], the logits' gradient
-            grad_z = z.to(torch.bfloat16)  # [C, V]
-            grad_hidden[start:end] = grad_z @ weight16  # [C, D]
-            if grad_weight is not None:
-                grad_weight += grad_z.T @ h  # [V, D]
-        return grad_hidden, grad_weight, None  # targets get none
+        with torch.autocast(hidden.device.type, enabled=False):
+            for start in range(0, count, CHUNK):
+                end = min(start + CHUNK, count)
+                h = hidden[start:end].to(ctx.dtype)  # [C, D]
+                y = targets[start:end]  # [C]
+                rows = torch.arange(end - start, device=hidden.device)  # [C]
+                z = (h @ head.T).float()  # [C, V], the chunk's logits again
+                z = z.softmax(dim=-1)  # [C, V]
+                z[rows, y] -= 1  # [C, V], softmax - onehot: minus each log probability's dz
+                z *= -grad_log_probs[start:end, None]  # [C, V], the logits' gradient
+                grad_z = z.to(ctx.dtype)  # [C, V]
+                grad_hidden[start:end] = grad_z @ head  # [C, D]
+                if grad_weight is not None:
+                    grad_weight += grad_z.T @ h  # [V, D]
+        return grad_hidden, grad_weight, None, None  # targets and fp32_head get none
