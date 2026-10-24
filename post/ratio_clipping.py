@@ -47,16 +47,15 @@ EPSILON = 0.2
 
 
 def clipped_loss(
-    new: Tensor, old: Tensor, weights: Tensor
+    new: Tensor, old: Tensor, weights: Tensor, high: float = EPSILON
 ) -> tuple[Tensor, Tensor]:  # [A], [A], [A]
     """The loss over one row's answer tokens, and which tokens the clip stopped. weights is each
-    token's answer's advantage over N here, over the batch's answer tokens in post/rlvr.py."""
+    token's answer's advantage over N here, over the batch's answer tokens in post/rlvr.py. The
+    ratios are clipped to 1 - EPSILON and 1 + high."""
     ratios = (new - old).exp()  # [A]
-    clipped = ratios.clamp(1 - EPSILON, 1 + EPSILON)  # [A]
+    clipped = ratios.clamp(1 - EPSILON, 1 + high)  # [A]
     objective = torch.minimum(ratios * weights, clipped * weights)  # [A]
-    stopped = (ratios * weights) > (
-        clipped * weights
-    )  # [A], past the bound the advantage pushes to
+    stopped = ratios * weights > clipped * weights  # [A], past the bound it's pushed to
     return -objective.sum(), stopped
 
 
