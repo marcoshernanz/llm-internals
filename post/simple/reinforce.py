@@ -22,11 +22,9 @@ def reward(text: str) -> float:
     return 1.0 if "dog" in text else 0.0
 
 
-def sample(
-    model: Qwen3, prompt: Tensor, samples: int, new_tokens: int = NEW_TOKENS
-) -> Tensor:  # [P]
+def sample(model: Qwen3, prompt: Tensor, samples: int) -> Tensor:  # [P]
     ids = prompt.repeat(samples, 1)  # [N, P]
-    for _ in range(new_tokens):
+    for _ in range(NEW_TOKENS):
         logits = model(ids)[:, -1]  # [N, V]
         probs = logits.softmax(dim=-1)  # [N, V]
         next_ids = torch.multinomial(probs, num_samples=1)  # [N, 1]
