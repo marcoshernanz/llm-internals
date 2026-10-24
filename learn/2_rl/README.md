@@ -18,6 +18,7 @@ GSM8K in `post/`, with their results in `post/ROADMAP.md`, stages 3 and 4.
 | 009 | [`009_no_kl.py`](009_no_kl.py) | 008 | no KL penalty | `post/rlvr.py`, fix 3 |
 | 010 | [`010_zero_gradient_filtering.py`](010_zero_gradient_filtering.py) | 009 | no update on a group whose rewards are all equal | `post/rlvr.py`, fix 4 |
 | 011 | [`011_clip_higher.py`](011_clip_higher.py) | 010 | the clip's upper bound raised, the lower kept | `post/rlvr.py`, fix 5 |
+| 012 | [`012_truncated_importance_sampling.py`](012_truncated_importance_sampling.py) | 011 | each token weighted by the trainer's probability over the sampler's, capped | `post/rlvr.py`, fix 6 |
 
 ## 001 pass@k
 
@@ -222,3 +223,26 @@ Loosening the lower bound too would let the tokens of wrong samples be pushed to
 narrows the samples as well.
 
 **The change.** `EPSILON` becomes `EPSILON_LOW` and `EPSILON_HIGH`, and the clamp takes both.
+
+## 012 Truncated importance sampling
+
+**Problem.** The loss assumes the samples came from the model it trains. In practice a separate
+copy samples, at lower precision or with other code, and gives the same tokens slightly different
+probabilities. Tokens the sampler draws more often than the trainer would are pushed more often
+than they should be, and the rest less.
+
+**Fix.** Weight each token by how much likelier the trainer finds it than the sampler did. The
+sampler's probability is the one it drew the token with; the trainer's is the old one. A token the
+sampler found far less likely would get a huge weight and dominate, so the weight is capped:
+
+$$
+w_t = \min\left(\frac{p_\text{old}(y_t)}{p_\text{sampler}(y_t)},\ C\right)
+$$
+
+The weight is a number: no gradient goes through it.
+
+**The change.** `sample` also returns each drawn token's log-probability, the `importance` line, and
+`importance *` in the objective.
+
+**What the toy can't show.** Its sampler is the model itself, at the same precision, so every weight
+is 1 up to rounding. In `post/rlvr.py` the sampler is a bf16 copy.
