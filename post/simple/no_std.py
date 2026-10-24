@@ -29,7 +29,7 @@ def main() -> None:
             ref_log_probs = token_log_probs(reference, ids, len(prompt))  # [N, A]
         texts = [tokenizer.decode(row) for row in ids[:, len(prompt) :].tolist()]
         rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
-        advantages = ((rewards - rewards.mean()) / (rewards.std() + 1e-4))[:, None]  # [N, 1]
+        advantages = (rewards - rewards.mean())[:, None]  # [N, 1]
 
         for _ in range(UPDATES):
             new_log_probs = token_log_probs(model, ids, len(prompt))  # [N, A]
@@ -40,7 +40,7 @@ def main() -> None:
             objective = (
                 torch.minimum(ratios * advantages, clipped * advantages) - BETA * kl
             )  # [N, A]
-            loss = -objective.mean()
+            loss = -objective.mean(dim=-1).mean()
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
