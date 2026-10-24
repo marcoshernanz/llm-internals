@@ -472,6 +472,27 @@ Each stage starts from a problem we can see in the previous stage's output.
     - The training reward rose faster early: 0.331, 0.422, 0.381, 0.519, against 0.272, 0.375, 0.434, 0.494. Two runs with the same settings differ by up to 0.03, so only the first two windows are clearly ahead.
     - 10 questions with all 16 right, against 1, and pass@16 3.5 points below the first fix alone: without the pull the model sharpens more. Within the noise of 200 questions.
     - 7.5 minutes, 22.5 seconds per step against 23.3, peak 17.3 GiB against 19.5: ratio clipping's, the copy gone. Right answers 86, 79, 83, 88 tokens, wrong 118, 116, 109, 119. 95% of answers close their turn.
+- **4. Zero-gradient filtering** (done, `post/rlvr.py`). A question whose answers all score the same, all right or all wrong, has every advantage 0: its answers push nothing, but they cost their sampling and their passes, and with the token-level loss their tokens still count in the total every token's push is divided by, so they shrink the rest's. The fix drops those questions and samples more until the batch is full of questions whose answers' rewards differ, as DAPO and OLMo 3 do. The alternative drops them without refilling, and trains on a batch whose size changes from step to step.
+  - The toy (`learn/2_rl/010_zero_gradient_filtering.py`): `009_no_kl.py` with `if (advantages == 0).all(): continue`. One prompt makes one group, so the toy drops whole batches and has nothing to refill with. It still changes the run: in 009, batches 0 and 1 had every advantage 0, but their updates still counted as AdamW steps. Adam corrects its running averages for how many steps it has taken, so 009's first real update, at step 9, was about half the size of 010's, at step 1. From batch 3 on, the two runs sample differently.
+  - GSM8K: `post/rlvr.py` samples 8 questions at a time, for at most 3 rounds, keeps the questions whose answers' rewards differ, and trains on the first 8. It logs how many questions each step sampled and what share of them were all right or all wrong, over every answer sampled.
+
+    |  | questions sampled per step | all right or all wrong | reward, every answer sampled |
+    |---|---|---|---|
+    | steps 1-5 | 14.4 | 24% | 0.340 |
+    | steps 6-10 | 12.8 | 11% | 0.391 |
+    | steps 11-15 | 16.0 | 30% | 0.475 |
+    | steps 16-20 | 16.0 | 25% | 0.427 |
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | ratio clipping | 55% | 41.0% | 54.8% | 67.3% | 78.4% | 87.5% | 25 | 9 |
+    | the first three fixes | 52% | 40.5% | 54.9% | 67.7% | 78.3% | 86.5% | 27 | 10 |
+    | and zero-gradient filtering | 53% | 41.6% | 56.1% | 68.4% | 78.5% | 86.5% | 27 | 9 |
+
+    - The problem, measured: about a quarter of the questions sampled, 11% to 30% over 5 steps at a time, have every answer right or every answer wrong. Without the fix, that share of every batch trains on nothing.
+    - About the same scores: pass@1 1.1 points higher, within the noise of 200 questions. 20 steps is too short to see the share of all-right questions grow as the model improves, which is when the filter matters most.
+    - The cost: 34.8 seconds per step against 22.5. Most steps sample a second round, and a round of sampling costs about 13 seconds. 11.6 minutes in all, and the whole run with its evaluation took 16.7, close to the 20-minute limit. The rewards aren't comparable step for step with earlier runs: after the first round a step takes questions the earlier runs never saw.
+    - Peak 17.3 GiB, as before. Right answers 83, 85, 79, 80 tokens, wrong 117, 111, 111, 116. 96% of answers close their turn.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
