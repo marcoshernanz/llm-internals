@@ -9,7 +9,8 @@ so far:
    Here every token is divided by the batch's answer tokens, so its push depends on its answer's
    advantage only (learn/2_rl/007_token_mean.py):
 
-       loss = -1/(sum_j |y_j|) sum_i sum_t min(r_i,t A_i, clip(r_i,t, 1 - eps, 1 + eps_high) A_i)
+       loss = -1/(sum_j |y_j|) sum_i sum_t w_i,t min(r_i,t A_i,
+                                                     clip(r_i,t, 1 - eps, 1 + eps_high) A_i)
 
    This is DAPO's; Dr. GRPO divides by a constant instead.
 
@@ -46,6 +47,19 @@ so far:
    whose 0.28 this takes; OLMo 3 uses 0.272. Loosening the lower bound too would let the tokens of
    wrong answers be pushed toward 0, which narrows the answers as well.
 
+6. Truncated importance sampling, with an fp32 output layer. The sampler, a bf16 copy, and the
+   trainer, fp32 weights with bf16 matmuls, give the same tokens slightly different
+   probabilities, so the answers come from a model a little different from the one the loss
+   assumes. Each token is weighted by how much likelier the trainer finds it than the sampler
+   did, capped at CAP so that no token dominates, as in OLMo 3, after the paper that proposed it:
+
+       w_i,t = min(p_old(y_i,t | x_i, y_i,<t) / p_sampler(y_i,t | x_i, y_i,<t), CAP)
+
+   The weight is a number, with no gradient through it. At temperature 1 the sampler's
+   distribution is the model's. Both output layers run in fp32, the sampler's with the trainer's
+   fp32 embedding table, which brings the two about a third closer (post/eval/sampler_gap.py).
+   MiniMax found the output layer to be where their gap came from.
+
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
 
@@ -58,6 +72,7 @@ from collections.abc import Iterator
 
 import torch
 from tokenizers import Tokenizer
+from torch import Tensor
 
 from post.chat import token_log_probs
 from post.qwen3 import (
@@ -82,19 +97,23 @@ from post.sft import MAX_GRAD_NORM, Chat, join, pack, unread_gsm8k
 
 ROUNDS = 3  # at most, of QUESTIONS questions sampled per step
 EPSILON_HIGH = 0.28  # the clip's upper bound is 1 + EPSILON_HIGH, the lower 1 - EPSILON
+CAP = 2.0  # the largest importance weight
 
 
 def mixed_rollouts(
-    sampler: Qwen3, tokenizer: Tokenizer, problems: Iterator[dict[str, str]]
-) -> tuple[list[Chat], list[float], list[Chat], list[float]]:
-    """The answers and rewards of QUESTIONS questions whose answers' rewards differ, then every
-    answer sampled to find them, with its reward, for the logs."""
+    sampler: Qwen3, tokenizer: Tokenizer, problems: Iterator[dict[str, str]], head: Tensor
+) -> tuple[list[Chat], list[float], list[list[float]], list[Chat], list[float]]:
+    """The answers, rewards and sampler's log probabilities of QUESTIONS questions whose answers'
+    rewards differ, then every answer sampled to find them, with its reward, for the logs. head is
+    the sampler's (post/qwen3.py)."""
     kept_chats: list[Chat] = []
     kept_rewards: list[float] = []
+    kept_log_probs: list[list[float]] = []
     all_chats: list[Chat] = []
     all_rewards: list[float] = []
     for _ in range(ROUNDS):
-        chats, rewards = rollouts(sampler, tokenizer, [next(problems) for _ in range(QUESTIONS)])
+        batch = [next(problems) for _ in range(QUESTIONS)]
+        chats, rewards, log_probs = rollouts(sampler, tokenizer, batch, head)
         all_chats += chats
         all_rewards += rewards
         for start in range(0, len(chats), SAMPLES):  # a question's answers come together
@@ -102,15 +121,36 @@ def mixed_rollouts(
             if min(group) < max(group):  # some right, some wrong: not every advantage is 0
                 kept_chats += chats[start : start + SAMPLES]
                 kept_rewards += group
+                kept_log_probs += log_probs[start : start + SAMPLES]
         if len(kept_chats) >= QUESTIONS * SAMPLES:
             break
     count = QUESTIONS * SAMPLES
-    return kept_chats[:count], kept_rewards[:count], all_chats, all_rewards
+    return (
+        kept_chats[:count],
+        kept_rewards[:count],
+        kept_log_probs[:count],
+        all_chats,
+        all_rewards,
+    )
+
+
+def row_log_probs(rows: list[list[Chat]], log_probs: list[list[float]]) -> list[Tensor]:
+    """For each row, its answers' tokens' log probabilities, in order; pack keeps the order."""
+    per_row = []
+    start = 0
+    for row in rows:
+        answers = log_probs[start : start + len(row)]
+        start += len(row)
+        per_row.append(
+            torch.tensor([p for answer in answers for p in answer], device=DEVICE)
+        )  # [A]
+    return per_row
 
 
 def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
     """Train the model on STEPS steps of QUESTIONS problems each, UPDATES updates per step."""
     sampler = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # the copy that samples
+    head = model.embed_tokens.weight.detach()  # [V, D], the sampler's output layer: fp32, live
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
     )
@@ -122,21 +162,35 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
     up_probability = 0.0  # the sum of those at the upper's probabilities when sampled
     probability = 0.0  # the same sum over every answer token in those updates
     tokens = 0  # those answer tokens
+    gap = 0.0  # the sum of |log p_old - log p_sampler| over every answer token since the last print
+    capped = 0  # answer tokens whose importance weight was capped since then
+    largest = 0.0  # the largest importance weight before the cap since then
+    drawn_tokens = 0  # answer tokens since then
     for step in range(STEPS):
         sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
-        chats, rewards, sampled, sampled_rewards = mixed_rollouts(sampler, tokenizer, stream)
+        chats, rewards, log_probs, sampled, sampled_rewards = mixed_rollouts(
+            sampler, tokenizer, stream, head
+        )
         rows = pack(chats)
+        drawn = row_log_probs(rows, log_probs)  # [A] each, the sampler's
         answer_lengths = [sum(answer) for _, answer in chats]
         weights = token_weights(rows, advantages(rewards), sum(answer_lengths))  # over all of them
         old = []  # each row's log probabilities from the weights that sampled
+        importance = []  # each row's tokens' weights, p_old over p_sampler, capped
         for update in range(UPDATES):
             for k, row in enumerate(rows):
                 ids, mask, packing = join(row)  # [1, T] each
                 with torch.autocast(DEVICE, dtype=torch.bfloat16):  # matmuls in bf16
-                    new = token_log_probs(model, ids, mask, packing)  # [A]
+                    new = token_log_probs(model, ids, mask, packing, fp32_head=True)  # [A]
                 if update == 0:
                     old.append(new.detach())
-                loss, stopped = clipped_loss(new, old[k], weights[k], EPSILON_HIGH)
+                    log_ratios = old[k] - drawn[k]  # [A]
+                    importance.append(log_ratios.exp().clamp(max=CAP))  # [A]
+                    gap += float(log_ratios.abs().sum())
+                    capped += int((log_ratios.exp() > CAP).sum())
+                    largest = max(largest, float(log_ratios.exp().max()))
+                    drawn_tokens += log_ratios.numel()
+                loss, stopped = clipped_loss(new, old[k], weights[k] * importance[k], EPSILON_HIGH)
                 loss.backward()  # adds to the gradients of the rows before
                 if update == UPDATES - 1:
                     up = stopped & (weights[k] > 0)  # [A], stopped at the upper bound
@@ -162,7 +216,9 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
                 f"{stopped_up / tokens:.1%} of answer tokens at the upper bound and "
                 f"{stopped_down / tokens:.1%} at the lower in the last update, those at the upper "
                 f"{up_probability / max(stopped_up, 1):.2f} likely when sampled on average, "
-                f"every answer token {probability / tokens:.2f}; "
+                f"every answer token {probability / tokens:.2f}; trainer and sampler "
+                f"{gap / drawn_tokens:.4f} apart in log probability on average, "
+                f"{capped / drawn_tokens:.2%} of weights capped, the largest {largest:.2f}; "
                 f"right answers {sum(right) / len(right):.0f} tokens, "
                 f"wrong {sum(wrong) / len(wrong):.0f}"
             )
@@ -173,6 +229,10 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
             up_probability = 0.0
             probability = 0.0
             tokens = 0
+            gap = 0.0
+            capped = 0
+            largest = 0.0
+            drawn_tokens = 0
 
 
 def main() -> None:
