@@ -74,6 +74,20 @@ def add_lora(model: Qwen3, rank: int, alpha: float) -> None:
                 setattr(module, name, LoRA(child, rank, alpha))
 
 
+def merged_state_dict(model: Qwen3) -> dict[str, Tensor]:
+    """The model's weights as a plain Qwen3 has them, each LoRA's correction added into its frozen
+    layer's weight, W + (alpha / r) B A: what a sampler without LoRA loads (post/rlvr.py). A model
+    without LoRA gives its own state dict."""
+    state = model.state_dict()
+    for name, module in model.named_modules():
+        if isinstance(module, LoRA) and isinstance(module.linear, Linear):
+            weight = state.pop(f"{name}.linear.weight")  # [out, in]
+            a = state.pop(f"{name}.a")  # [r, in]
+            b = state.pop(f"{name}.b")  # [out, r]
+            state[f"{name}.weight"] = weight + module.scale * (b @ a)  # [out, in]
+    return state
+
+
 def lora_groups(model: Qwen3) -> list[Group]:
     """The weights that train, each group at its own peak learning rate: LoRA's matrices at 10
     times full fine-tuning's, which makes up for B starting at zero; the embedding table, trained
