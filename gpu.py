@@ -8,6 +8,8 @@ compiled code or memory doesn't carry into the next. Its output streams here and
 container for all the modules pays the startup and the model download once. At the end it prints
 how long it waited for a GPU, how long it ran, and what that cost: Modal bills the running time
 only. Weights a module saves to ``/checkpoints``, a Modal Volume, stay there for later runs to load.
+Words after a module's name are its arguments: ``--modules "post.eval.rlvr_noise 1"`` runs
+``python -m post.eval.rlvr_noise 1``, and logs to ``out/post.eval.rlvr_noise_1.log``.
 """
 
 import subprocess
@@ -39,9 +41,9 @@ def run(modules: list[str]) -> tuple[dict[str, bytes], float]:
     for module in modules:
         print(f"\n$ python -m {module}", flush=True)
         start = time.time()
-        with open(OUT_DIR / f"{module}.log", "w") as log:
+        with open(OUT_DIR / f"{'_'.join(module.split())}.log", "w") as log:
             process = subprocess.Popen(
-                [sys.executable, "-u", "-m", module],
+                [sys.executable, "-u", "-m", *module.split()],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
