@@ -1,6 +1,6 @@
 """
-Look at the chat tokens' rows in the base model's embedding table, which is also its head: a token's
-logit is its row times the hidden state. A row the base model trained points its own way; a row it
+Look at the chat and tool-call tokens' rows in the base model's embedding table, which is also its
+head: a token's logit is its row times the hidden state. A row the base model trained points its own way; a row it
 never trained stays near where it started, beside the rows of other tokens it rarely saw. Then no
 hidden state can raise that token's logit without raising theirs too. For each token: its row's
 length against the median row's, how many rows are the very same vector, and the rows nearest it
@@ -16,7 +16,15 @@ import torch
 
 from post.qwen3 import DEVICE, REPO_ID, load_qwen3, load_tokenizer
 
-TOKENS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", " dóla", " spep"]
+TOKENS = [
+    "<|im_start|>",
+    "<|im_end|>",
+    "<tool_call>",
+    "</tool_call>",
+    "<|endoftext|>",
+    " dóla",
+    " spep",
+]
 NEIGHBORS = 8
 CLOSE = 0.5  # a cosine similarity above which two rows count as pointing the same way
 
