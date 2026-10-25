@@ -13,6 +13,7 @@ Each folder is one ladder, numbered in the order to read it:
 |---|---|
 | [`1_finetuning/`](1_finetuning/) | SFT, then the same training in fewer bytes: LoRA, NF4, QLoRA |
 | [`2_rl/`](2_rl/) | learning from the model's own samples: pass@k, rejection sampling, REINFORCE, then GRPO and the fixes later recipes made |
+| [`3_tools/`](3_tools/) | the model acts and something else answers: a tool call, the loss on the model's tokens only, an environment |
 
 Each folder's `README.md` is its index: every file, the file it builds on, the problem it solves,
 the fix, the lines that changed, and its full version in the real project.
@@ -49,7 +50,7 @@ A mechanism usually lands in both parts: its full version in `post/`, with its r
    what the toy can't show, if anything.
 5. Run `uv run ruff format . && uv run ruff check . && uv run ty check`.
 
-A new ladder gets the next folder number, such as `3_reward_models/`, and starts again at `001`.
+A new ladder gets the next folder number, such as `4_reward_models/`, and starts again at `001`.
 
 ## Running one
 
