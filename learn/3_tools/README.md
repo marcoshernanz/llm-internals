@@ -27,10 +27,11 @@ sequence now has two writers, and `model_wrote` records which wrote each token.
 **Why special tokens.** The pause has to see where the call ends, and the text arrives a token at
 a time. `<tool_call>`, `</tool_call>` and `<|im_end|>` are one id each in Qwen's vocabulary, 151657,
 151658 and 151645, never split or merged with their neighbours and never meaning anything else, so
-the loop only compares the last id. A tag made of ordinary text fails: a first version wrote
+the loop only compares the last id. A tag made of ordinary text is fragile. A first version wrote
 `<calc>37 * 48</calc><result>`, and the tokenizer splits `</calc><result>` into `</`, `calc`, `><`,
-`result`, `>`. The text never ended in `</calc>`, the calculator never ran, and the model wrote the
-result itself, from its head.
+`result`, `>`. The text never ended in `</calc>`, so its check never fired, and the model wrote the
+result itself, from its head. Engines that stop on text search the new text for the tag instead of
+checking how it ends, and cut the output there, which splits the token `><` in two.
 
 **Why the chat model.** The base model never trained these tokens' rows of its embedding table,
 which is also its head (`post/eval/embeddings.py`). Each is the same short vector as 290 other
