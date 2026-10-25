@@ -3,12 +3,14 @@ Shape letters used in the comments:
     N   samples
     T   tokens: the prompt, then the model's and the calculator's
     V   vocabulary size
+    A   of them, the model's
 """
 
 import re
 
 import torch
 from tokenizers import Tokenizer
+from torch import Tensor
 
 from post.qwen3 import DEVICE, Qwen3, load_qwen3, load_tokenizer
 
@@ -26,6 +28,8 @@ END_OF_TURN = 151645  # <|im_end|>
 ANSWER = 1776
 SAMPLES = 8
 MAX_TOKENS = 40
+STEPS = 10
+LEARNING_RATE = 1e-5
 
 
 def reward(text: str) -> float:
@@ -62,19 +66,38 @@ def rollout(model: Qwen3, tokenizer: Tokenizer, prompt: list[int]) -> tuple[list
     return ids, model_wrote
 
 
+def model_log_probs(model: Qwen3, ids: list[int], model_wrote: list[bool]) -> Tensor:
+    ids_t = torch.tensor(ids, device=DEVICE)  # [T]
+    logits = model(ids_t[None, :-1])[0]  # [T-1, V]
+    log_probs = logits.log_softmax(dim=-1)  # [T-1, V]
+    picked = log_probs.gather(-1, ids_t[1:, None]).squeeze(-1)  # [T-1]
+    counted = torch.tensor(model_wrote[1:], device=DEVICE)  # [T-1]
+    return picked[counted]  # [A]
+
+
 def main() -> None:
     torch.manual_seed(0)
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     prompt = tokenizer.encode(PROMPT).ids
 
-    with torch.no_grad():
-        rollouts = [rollout(model, tokenizer, prompt) for _ in range(SAMPLES)]
-    texts = [tokenizer.decode(ids[len(prompt) :]) for ids, _ in rollouts]
-    rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
+    for step in range(STEPS):
+        with torch.no_grad():
+            rollouts = [rollout(model, tokenizer, prompt) for _ in range(SAMPLES)]
+        texts = [tokenizer.decode(ids[len(prompt) :]) for ids, _ in rollouts]
+        rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
+        advantages = rewards - rewards.mean()  # [N]
 
-    for text, (_, model_wrote), r in zip(texts, rollouts, rewards.tolist()):
-        print(f"reward {r:.0f}, {sum(model_wrote)} tokens by the model  {text!r}")
+        log_probs = [model_log_probs(model, ids, model_wrote) for ids, model_wrote in rollouts]
+        tokens = sum(len(answer) for answer in log_probs)
+        pushes = torch.stack([a * answer.sum() for a, answer in zip(advantages, log_probs)])  # [N]
+        loss = -pushes.sum() / tokens
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        print(f"step {step}: reward {rewards.mean().item():.2f}  {texts[0]!r}")
 
 
 if __name__ == "__main__":
