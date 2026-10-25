@@ -12,7 +12,7 @@ Researched in October 2026. Numbers marked "est." are order-of-magnitude estimat
 | 1 | SFT | Done |
 | 2 | LoRA, then QLoRA | Done |
 | 3 | Rejection sampling | Done |
-| 4 | RL with verifiable rewards | In progress |
+| 4 | RL with verifiable rewards | Done |
 | 5 | Multi-turn environments and tools | Not started |
 | 6 | Learned rewards: reward model, RLHF, DPO | Not started |
 | 7 | On-policy distillation | Not started |
@@ -346,6 +346,7 @@ Each stage starts from a problem we can see in the previous stage's output.
   - The environment interface: deferred to stage 5, when there's a second task.
   - Per-token log-probs from the sampler: ratio clipping takes its old log-probs from the trainer instead, as frontier trainers do. The sampler's wait for the sampler-trainer mismatch.
   - The KL term: GRPO keeps it as DeepSeekMath wrote it, and removing it is one of the fixes. DAPO and Dr. GRPO remove it; DeepSeek V3.2 keeps a corrected KL instead.
+  - Countdown: moved to stage 5 (2026-10-25), as a second task for the environment interface.
 - **REINFORCE** (done, `post/reinforce.py`):
   - Each step, the model answers 8 GSM8K train questions SFT never read, 8 samples each at temperature 1.
   - Reward: 1 if the answer closed its turn and is right by strict grading, 0 if not.
@@ -539,14 +540,53 @@ Each stage starts from a problem we can see in the previous stage's output.
     - Greedy 6 points lower and pass@16 4.5 lower, with 38 questions none of 16 right against 29. Weights within about 1% of 1 can't account for that much, and nothing here measures how much two runs with the same settings differ: that's the next thing to measure, before reading any more of these tables.
     - Every answer token's probability when sampled rose from 0.73 to 0.80, against 0.70 to 0.76 with clip-higher alone: the model sharpened more.
     - 12.3 minutes, 36.8 seconds per step against 34.4: the fp32 output layers cost about 2.4 seconds a step. Peak 17.0 GiB. Right answers 81, 75, 75, 80 tokens, wrong 123, 108, 97, 106. 97% of answers close their turn.
+- **How much one run moves by chance** (`post/eval/rlvr_noise.py`): the sixth fix's run twice more, on the same questions in the same order, with every sample, training's and the evaluation's, drawn from another seed. The two ran at once, each on an L4 of its own: `gpu.py` passes the words after a module's name to it as arguments.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right |
+    |---|---|---|---|---|---|---|---|---|
+    | the sixth fix's run | 46% | 38.4% | 52.3% | 64.5% | 74.3% | 81.0% | 38 | 9 |
+    | seed 1 | 47% | 37.0% | 50.7% | 64.3% | 75.7% | 84.0% | 32 | 12 |
+    | seed 2 | 54% | 41.6% | 56.3% | 69.3% | 79.5% | 86.5% | 27 | 8 |
+
+    - Three runs of one setup span 8 points of greedy, 4.6 of pass@1 and 5.5 of pass@16, and 27 to 38 questions with none right. Their standard deviations are about 4.4, 2.4 and 2.8 points.
+    - Greedy is one answer per question from the trained model, so its 8 points are mostly training's chance: which answers each step happened to sample.
+    - Against that band, every pass@1 since ratio clipping, from 37.8% to 41.6%, is one setup measured once. The one outside it is no standard deviation's 34.2%, 2.8 points below the lowest of the three, which fits its KL story but is one run. At 20 steps and 200 test questions, one run per setting can't tell apart differences under about 5 points: telling them apart takes several seeds per setting, or runs long enough for the differences to grow.
+    - The training reward over the last 5 steps: 0.415, 0.434 and 0.464. The largest importance weight reached 2.65 in seed 1, the cap's only use: 0.01% of the weights in its last 5 steps.
+- **The two controls** (`post/eval/rlvr_lora.py`, `post/eval/rlvr_random.py`), each the sixth fix's run with one change, on the same questions, measured as the three runs above. The two ran at once.
+
+    |  | greedy | pass@1 | pass@2 | pass@4 | pass@8 | pass@16 | none of 16 right | all 16 right | closed their turn |
+    |---|---|---|---|---|---|---|---|---|---|
+    | the SFT model | 50% | 25.3% | 38.2% | 52.1% | 65.0% | 76.0% | 48 | 1 | 96% |
+    | the three full runs | 46-54% | 37.0-41.6% | 50.7-56.3% | 64.3-69.3% | 74.3-79.5% | 81.0-86.5% | 27-38 | 8-12 | 95-97% |
+    | a LoRA of rank 1 | 52% | 39.6% | 52.7% | 64.5% | 74.8% | 83.5% | 33 | 12 | 97% |
+    | every reward a coin flip | 39% | 15.5% | 24.8% | 35.9% | 47.9% | 59.5% | 81 | 0 | 86% |
+
+  - **A LoRA of rank 1** on every linear layer, and nothing else trained: 630,784 weights, 0.106% of the model's 596 million, at 10 times the learning rate, 2e-5, with post/lora.py's alpha of 32. The sampler loads the weights with each LoRA merged in (`merged_state_dict`).
+    - Every number lands inside the three full runs' band. One answer gives back one reward, so 20 steps carry little information, and a correction of rank 1 holds all of it. That matches Thinking Machines' LoRA Without Regret; SFT, which learns every token of a written answer, needs far more.
+    - The training reward: 0.328, 0.354, 0.418, 0.415, as the full runs'. Peak 9.0 GiB against 17.0: no gradients or AdamW moments for the frozen weights. 34.6 seconds per step.
+  - **Every reward a coin flip,** 1 or 0 with even odds whatever the answer says. The training log's reward is the coin's, about 0.5; the check's reward on the same answers, a quarter of the run at a time: 0.281, 0.281, 0.247, 0.250.
+    - Far below the SFT model: pass@1 15.5% against 25.3%, 81 questions with none of 16 right against 48, and 86% of answers closing their turn against 96%. With no signal, the updates push the model in random directions away from what SFT taught it, and it gets worse, not sharper. Answers grew to 113 tokens, right or wrong, against about 80 for right ones in the real runs, and every answer token's probability when sampled fell from 0.68 to 0.65, where in the real runs it rose.
+    - So the gain from 25% to about 39% is the reward's doing. Random rewards raised Qwen2.5-Math's score in the paper that tried them, which traced the gain to the clip favoring what the model already prefers. Not here: one guess, unchecked, is that clip-higher's wider upper bound tilts the other way, toward unlikely tokens.
+    - 27.0 seconds per step: coin flips are almost never all equal, so a step needs one round of sampling.
 - **Where the fixes leave `post/rlvr.py`:** ratio clipping with the token-level loss, the baseline's advantage, no KL, zero-gradient filtering, clip-higher and truncated importance sampling with fp32 output layers: OLMo 3's objective, sampled in steps rather than asynchronously.
 - **Frontier:** the end state is where OLMo 3, DeepSeek, TRL's defaults and Meta's ScaleRL all land. The alternatives are GSPO (sequence-level ratios, Qwen's choice for MoE) and CISPO (MiniMax).
 - **Runs on:** Modal L4, while the credits last.
 
 ### 5. Multi-turn environments and tools
 
-- **Problem:** in stage 4's failures the reasoning is right but the arithmetic slips.
+- **Problem:** one calculation in eight is wrong (`post/eval/arithmetic_slips.py`). Every step written as expression = number, as GSM8K's solutions write them, computed again in Python; 8 answers to each of the 200 test questions at temperature 1. A slip is a step off by more than 1% and 0.01.
+
+  |  | steps checked | wrong | wrong answers | with a slip | every step right | no step to check | right answers with a slip |
+  |---|---|---|---|---|---|---|---|
+  | the SFT model | 3,265 | 13.3% | 1,194 | 25% | 51% | 23% | 7% |
+  | stage 4's model | 3,480 | 12.3% | 1,023 | 28% | 55% | 18% | 6% |
+
+  - The plan said that in stage 4's failures the reasoning is right and the arithmetic slips. Half is true: about a quarter of wrong answers have a slip, as written, "15 + 25 + 90 = 120", "50000*1.5=$80000". But half of them have every step right: what went wrong was which calculations to do, not doing them.
+  - 20 steps of RL barely touched the arithmetic: 13.3% of steps wrong before, 12.3% after.
+  - 6% of right answers have a slip too: a step that didn't feed the answer, or the checker misreading one.
+  - A calculator fixes the first kind only, and that's the frontier's reason for tools: a model that needn't do arithmetic in its head spends no capacity on it, and the same loop serves search, code and every other tool.
 - **Build:**
+  - The environment interface deferred from stage 4: (problem, environment, verifier) triplets, with GSM8K and Countdown from Reasoning Gym as its first two tasks.
   - Multi-turn rollouts. The model writes Python, the environment runs it, and the output comes back as a turn with no loss on it.
   - Then a game: Wordle, with feedback every turn and a reward at the end.
 - **Check:**
