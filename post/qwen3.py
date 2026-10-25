@@ -368,9 +368,7 @@ def load_qwen3(repo_id: str, dtype: torch.dtype, device: str) -> Qwen3:
     for file in path.glob("*.safetensors"):  # bigger checkpoints are split into several files
         weights.update(load_file(file))  # tensor name -> tensor, in the checkpoint's bf16
     weights = {name.removeprefix("model."): tensor for name, tensor in weights.items()}
-    weights.pop(
-        "lm_head.weight", None
-    )  # chat checkpoints save the tied head too; tied, it's unused
+    weights.pop("lm_head.weight", None)  # chat checkpoints save the tied head too, unused
     # strict: every tensor must fill a parameter, and back; assign: the tensors become them
     model.load_state_dict(weights, assign=True)
     return model.to(device=device, dtype=dtype)
