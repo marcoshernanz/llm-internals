@@ -60,6 +60,9 @@ so far:
    fp32 embedding table, which brings the two about a third closer (post/eval/sampler_gap.py).
    MiniMax found the output layer to be where their gap came from.
 
+The model may carry LoRAs (post/lora.py): the sampler then loads the weights with each LoRA merged
+in, and learning_rate is LoRA's. post/eval/rlvr_lora.py runs it with LoRAs of rank 1.
+
 Run with ``uv run modal run gpu.py --modules post.rlvr``, after post.sft has saved its weights; it
 saves its own as "rlvr". post/eval/rlvr.py measures what it changes.
 
@@ -75,6 +78,7 @@ from tokenizers import Tokenizer
 from torch import Tensor
 
 from post.chat import token_log_probs
+from post.lora import merged_state_dict
 from post.qwen3 import (
     DEVICE,
     REPO_ID,
@@ -147,12 +151,17 @@ def row_log_probs(rows: list[list[Chat]], log_probs: list[list[float]]) -> list[
     return per_row
 
 
-def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> None:
+def rlvr(
+    model: Qwen3,
+    tokenizer: Tokenizer,
+    problems: list[dict[str, str]],
+    learning_rate: float = LEARNING_RATE,
+) -> None:
     """Train the model on STEPS steps of QUESTIONS problems each, UPDATES updates per step."""
     sampler = load_qwen3(REPO_ID, torch.bfloat16, DEVICE)  # the copy that samples
     head = model.embed_tokens.weight.detach()  # [V, D], the sampler's output layer: fp32, live
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=0.0, fused=True
+        model.parameters(), lr=learning_rate, weight_decay=0.0, fused=True
     )
     stream = iter(problems)
     logged = []  # every sampled answer's reward since the last print
@@ -167,7 +176,7 @@ def rlvr(model: Qwen3, tokenizer: Tokenizer, problems: list[dict[str, str]]) -> 
     largest = 0.0  # the largest importance weight before the cap since then
     drawn_tokens = 0  # answer tokens since then
     for step in range(STEPS):
-        sampler.load_state_dict(model.state_dict())  # the trained weights, copied into bf16
+        sampler.load_state_dict(merged_state_dict(model))  # the trained weights, copied into bf16
         chats, rewards, log_probs, sampled, sampled_rewards = mixed_rollouts(
             sampler, tokenizer, stream, head
         )
