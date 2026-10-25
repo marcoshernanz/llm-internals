@@ -117,4 +117,4 @@ Lint and type-check with `uv run ruff format . && uv run ruff check . && uv run 
 1. Model. Done.
 2. Minimal pre-training loop. Done: TinyStories, bytes as tokens.
 3. Kernels on an NVIDIA GPU: profiling, then Triton (RMSNorm, SwiGLU, cross-entropy, attention, MoE), then CUDA. In progress: profiling and RMSNorm (forward, backward and autograd) are done.
-4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT, LoRA and QLoRA, and rejection sampling are done; RL with verifiable rewards is under way, from REINFORCE to GRPO and the fixes later recipes made.
+4. Post-training of Qwen3-0.6B-Base: SFT, LoRA and QLoRA, rejection sampling, RL with verifiable rewards, environments, learned rewards, on-policy distillation, self-distillation, async rollouts. Plan in `post/ROADMAP.md`. In progress: SFT, LoRA and QLoRA, rejection sampling, and RL with verifiable rewards, from REINFORCE through GRPO to the fixes later recipes made, are done; environments are next.
