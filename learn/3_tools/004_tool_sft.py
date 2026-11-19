@@ -1,55 +1,45 @@
 """
 Shape letters used in the comments:
     N   samples
-    T   tokens: the prompt, then the model's and the game's
+    T   tokens: the prompt, then the model's and the calculator's
     V   vocabulary size
-    A   of them, the model's
 """
 
+import re
+
 import torch
+import torch.nn.functional as F
 from tokenizers import Tokenizer
 from torch import Tensor
 
-from post.qwen3 import DEVICE, Qwen3, load_qwen3, load_tokenizer
+from post.qwen3 import DEVICE, REPO_ID, Qwen3, load_qwen3, load_tokenizer
 
-REPO_ID = "Qwen/Qwen3-0.6B"  # the chat model: its post-training taught it the tool tokens
-PROMPT = (
-    "I'm thinking of a number from 1 to 100. Guess it, and I'll say higher or lower.\n"
-    "<tool_call>50</tool_call><tool_response>Higher.</tool_response>\n"
-    "<tool_call>75</tool_call><tool_response>Lower.</tool_response>\n"
-    "<tool_call>63</tool_call><tool_response>Correct!</tool_response><|im_end|>\n\n"
-    "I'm thinking of a number from 1 to 100. Guess it, and I'll say higher or lower.\n"
-)
+PROMPT = "Question: What is 37 * 48?\n"  # no examples: the fine-tune teaches the format
 CALL_START = 151657  # <tool_call>
 CALL_END = 151658  # </tool_call>
 END_OF_TURN = 151645  # <|im_end|>
-TURNS = 7
+ANSWER = 1776
 SAMPLES = 8
-MAX_TOKENS = 60
-STEPS = 10
+MAX_TOKENS = 40
+TRACES = [(12, 34), (56, 78), (91, 23), (45, 67), (89, 12), (34, 56)]  # a * b, worked with the tool
+EPOCHS = 60
 LEARNING_RATE = 1e-5
 
 
-class Game:
-    def __init__(self, target: int) -> None:
-        self.target = target
-        self.turns = 0
-
-    def step(self, call: str) -> tuple[str, float, bool]:
-        self.turns += 1
-        guess = call.strip()
-        if not guess.isdigit():
-            return "", 0.0, True
-        if int(guess) == self.target:
-            return "Correct!", 1.0, True
-        if self.turns == TURNS:
-            return "", 0.0, True
-        return "Higher." if int(guess) < self.target else "Lower.", 0.0, False
+def reward(text: str) -> float:
+    return 1.0 if text.endswith(f"Answer: {ANSWER}") else 0.0
 
 
-def rollout(
-    model: Qwen3, tokenizer: Tokenizer, prompt: list[int], game: Game
-) -> tuple[list[int], list[bool], float]:
+def calculator(expression: str) -> str:
+    if not re.fullmatch(r"[\d\s+\-*/().]+", expression):
+        return "error"
+    try:
+        return str(eval(expression))
+    except SyntaxError, ZeroDivisionError:
+        return "error"
+
+
+def rollout(model: Qwen3, tokenizer: Tokenizer, prompt: list[int]) -> tuple[list[int], list[bool]]:
     ids = list(prompt)
     model_wrote = [False] * len(prompt)
     call_start = len(ids)
@@ -63,22 +53,33 @@ def rollout(
         if ids[-1] == CALL_START:
             call_start = len(ids)
         if ids[-1] == CALL_END:
-            observation, reward, done = game.step(tokenizer.decode(ids[call_start:-1]))
-            if done:
-                return ids, model_wrote, reward
-            result = tokenizer.encode(f"<tool_response>{observation}</tool_response>").ids
+            value = calculator(tokenizer.decode(ids[call_start:-1]))
+            result = tokenizer.encode(f"<tool_response>{value}</tool_response>").ids
             ids += result
             model_wrote += [False] * len(result)
-    return ids, model_wrote, 0.0
+    return ids, model_wrote
 
 
-def model_log_probs(model: Qwen3, ids: list[int], model_wrote: list[bool]) -> Tensor:
-    ids_t = torch.tensor(ids, device=DEVICE)  # [T]
-    logits = model(ids_t[None, :-1])[0]  # [T-1, V]
-    log_probs = logits.log_softmax(dim=-1)  # [T-1, V]
-    picked = log_probs.gather(-1, ids_t[1:, None]).squeeze(-1)  # [T-1]
-    counted = torch.tensor(model_wrote[1:], device=DEVICE)  # [T-1]
-    return picked[counted]  # [A]
+def render(tokenizer: Tokenizer, a: int, b: int) -> tuple[Tensor, Tensor]:
+    pieces = [
+        (f"Question: What is {a} * {b}?\n", False),
+        (f"<tool_call>{a} * {b}</tool_call>", True),
+        (f"<tool_response>{a * b}</tool_response>", False),
+        (f"\nAnswer: {a * b}<|im_end|>", True),
+    ]
+    ids = []
+    model_wrote = []
+    for text, wrote in pieces:
+        piece = tokenizer.encode(text).ids
+        ids += piece
+        model_wrote += [wrote] * len(piece)
+    return torch.tensor(ids, device=DEVICE), torch.tensor(model_wrote, device=DEVICE)  # [T], [T]
+
+
+def sft_loss(model: Qwen3, ids: Tensor, model_wrote: Tensor) -> Tensor:  # [T], [T]
+    logits = model(ids[None, :-1])[0]  # [T-1, V]
+    losses = F.cross_entropy(logits, ids[1:], reduction="none")  # [T-1]
+    return losses[model_wrote[1:]].mean()
 
 
 def main() -> None:
@@ -86,25 +87,26 @@ def main() -> None:
     tokenizer = load_tokenizer(REPO_ID)
     model = load_qwen3(REPO_ID, torch.float32, DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    traces = [render(tokenizer, a, b) for a, b in TRACES]
+    for epoch in range(EPOCHS):
+        losses = []
+        for ids, model_wrote in traces:
+            loss = sft_loss(model, ids, model_wrote)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            losses.append(loss.item())
+        print(f"epoch {epoch}: loss {sum(losses) / len(losses):.3f}")
+
     prompt = tokenizer.encode(PROMPT).ids
 
-    for step in range(STEPS):
-        target = int(torch.randint(1, 101, ()))
-        with torch.no_grad():
-            rollouts = [rollout(model, tokenizer, prompt, Game(target)) for _ in range(SAMPLES)]
-        texts = [tokenizer.decode(ids[len(prompt) :]) for ids, _, _ in rollouts]
-        rewards = torch.tensor([reward for _, _, reward in rollouts], device=DEVICE)  # [N]
-        advantages = rewards - rewards.mean()  # [N]
+    with torch.no_grad():
+        rollouts = [rollout(model, tokenizer, prompt) for _ in range(SAMPLES)]
+    texts = [tokenizer.decode(ids[len(prompt) :]) for ids, _ in rollouts]
+    rewards = torch.tensor([reward(text) for text in texts], device=DEVICE)  # [N]
 
-        log_probs = [model_log_probs(model, ids, model_wrote) for ids, model_wrote, _ in rollouts]
-        tokens = sum(len(answer) for answer in log_probs)
-        pushes = torch.stack([a * answer.sum() for a, answer in zip(advantages, log_probs)])  # [N]
-        loss = -pushes.sum() / tokens
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-
-        print(f"step {step}: target {target}, reward {rewards.mean().item():.2f}  {texts[0]!r}")
+    for text, (_, model_wrote), r in zip(texts, rollouts, rewards.tolist()):
+        print(f"reward {r:.0f}, {sum(model_wrote)} tokens by the model  {text!r}")
 
 
 if __name__ == "__main__":
