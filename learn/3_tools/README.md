@@ -2,17 +2,18 @@
 
 Until now the model wrote every token after the prompt. Here the generation pauses: the model
 writes a call, something outside it answers, and the answer goes into the sequence as tokens the
-model didn't write. The calls use Qwen's own tool tokens, and the toys prompt Qwen3-0.6B, Qwen's
+model didn't write. The calls use Qwen's own tool tokens. 001 to 003 prompt Qwen3-0.6B, Qwen's
 chat model, with a few examples of the format: its post-training taught it those tokens, which the
-base model never learned (001). The full version will teach the base model itself, fine-tuning it
-first on traces of tool calls, from GSM8K's calculator notes. The full versions belong in `post/`,
-stage 5 of `post/ROADMAP.md`.
+base model never learned (001). 004 teaches the base model itself, fine-tuning it first on traces
+of tool calls, as the full version will from GSM8K's calculator notes. The full versions belong in
+`post/`, stage 5 of `post/ROADMAP.md`.
 
 | # | File | Builds on | Adds | Full version |
 |---|---|---|---|---|
 | 001 | [`001_tool_call.py`](001_tool_call.py) | — | the generation pauses for a calculator, whose result goes in as tokens the model didn't write | not yet |
 | 002 | [`002_tool_mask.py`](002_tool_mask.py) | 001 | RL on those rollouts, the loss on the model's tokens only | not yet |
 | 003 | [`003_environment.py`](003_environment.py) | 002 | an environment with state, which answers every call and gives the reward at the end | not yet |
+| 004 | [`004_tool_sft.py`](004_tool_sft.py) | 001 | the base model, fine-tuned first on traces of tool calls, which trains the tool tokens' rows | not yet |
 
 ## 001 Tool call
 
@@ -38,7 +39,7 @@ which is also its head (`post/eval/embeddings.py`). Each is the same short vecto
 tokens' rows, of length 0.350 against a median of 0.968, so its logit always equals theirs and it
 never gets more than 1 in 291 of the probability. Where the marker goes, the base model wrote a
 different junk token in each sample, " lucrative" or "严重等级", and used it as its marker.
-Fine-tuning on the format is what trains those rows.
+Fine-tuning on the format is what trains those rows (004).
 
 **How Qwen's real format differs.** The call is JSON, a function's name and its arguments. The
 engine stops at `<|im_end|>`, the end of the turn, and the result comes back in a new turn. Here
@@ -97,3 +98,29 @@ harder to define.
 
 **The change.** `Game` replaces `calculator` and `reward`, and `rollout` hands each call to
 `game.step` and appends its reply as the tool's response.
+
+## 004 Fine-tuning on tool calls
+
+**Problem.** The base model can't write the tool tokens (001). Their rows were never trained, and
+all three, `<tool_call>`, `</tool_call>` and `<|im_end|>`, are the same vector, so the model can't
+tell them apart, neither reading them nor writing them.
+
+**Fix.** Fine-tune it first on traces of the tool in use, as the frontier does before RL with
+tools. The loss is on what the model writes, the call and the answer with their three markers, and
+not on the question or the tool's response: SFT's mask (`1_finetuning/001`), split the way 002
+splits the model's tokens from the tool's. Each marker is the target in its own place, so its
+gradient pulls its row its own way, away from the 290 others and from the other two markers. The
+prompt loses its examples: the fine-tune teaches the format.
+
+**The change.** `render` builds a trace from its pieces and marks the model's, and `sft_loss` is
+`1_finetuning/001`'s. The model is the base again, and the prompt is the bare question.
+
+**Run.** 6 traces, at `1_finetuning/001`'s learning rate, 1e-5. The rows have far to go, and Adam
+moves each weight by at most about the learning rate per step:
+- After 10 epochs, at a loss of 0.846, the model still writes a junk token where `<tool_call>` goes.
+- After 30, at 0.113, it mixes up the three markers, which started as one vector: it opens with
+  `</tool_call>`, or ends its turn at once. 3 samples of 8 get the format right.
+- After 60, at 0.013, all 8 do: the call, Python's result, the answer, and the end of the turn.
+
+**What the toy can't show.** Whether the format carries over to other questions: 6 traces seen 60
+times teach this one form. The full version fine-tunes on GSM8K's thousands.
